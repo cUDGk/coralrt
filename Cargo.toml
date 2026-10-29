@@ -1,0 +1,12 @@
+[package]
+name = "coralrt"
+version = "0.1.0"
+edition = "2024"
+description = "Runs Coral Edge TPU models on the Coral USB Accelerator without libedgetpu or TensorFlow Lite, with a C ABI for other languages"
+
+[lib]
+# rlib for Rust, cdylib (coralrt.dll / libcoralrt.so) for C, Python and the rest
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+libloading = "0.9.0"

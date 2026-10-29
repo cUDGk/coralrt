@@ -1,0 +1,7 @@
+target/
+# the native library copied next to the Python package for a non-editable install
+python/coralrt/*.dll
+python/coralrt/*.so
+python/coralrt/*.dylib
+python/*.egg-info/
+__pycache__/
