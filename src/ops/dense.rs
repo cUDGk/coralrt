@@ -4,7 +4,7 @@
 //! input, 8-bit weights) through portable_tensor_utils, the shuffled 4x16 uint8 weights, and sparse weights (float
 //! laid out densely, hybrid through 2.5's ledger of 1x16 blocks). Also BATCH_MATMUL (batch_matmul.cc).
 
-use super::eigen;
+use super::tensor_utils::{apply_activation, quantize_row};
 use super::util::*;
 use super::{Io, Kernel};
 use crate::interp::Env;
@@ -404,59 +404,6 @@ impl FullyConnected {
         }
         apply_activation(out, self.act);
         Ok(())
-    }
-}
-
-/// SymmetricQuantizeFloats / AsymmetricQuantizeFloats (portable_tensor_utils.cc): (values, scale, zero point)
-pub(super) fn quantize_row(v: &[f32], asymmetric: bool) -> (Vec<i32>, f32, i32) {
-    // std::minmax_element: the first smallest, the last largest
-    let min = v.iter().copied().fold(v[0], |m, x| if x < m { x } else { m });
-    let max = v.iter().copied().fold(v[0], |m, x| if x < m { m } else { x });
-    if !asymmetric {
-        let (a, b) = (min.abs(), max.abs());
-        let range = if a < b { b } else { a };
-        if range == 0.0 {
-            return (vec![0; v.len()], 1.0, 0);
-        }
-        let inv = 127.0 / range;
-        let q = v.iter().map(|&x| (cvtt((x * inv).round() as f64, false) as i32).clamp(-127, 127)).collect();
-        return (q, range / 127.0, 0);
-    }
-    let (rmin, rmax) = ((min as f64).min(0.0), (max as f64).max(0.0));
-    if rmin == rmax {
-        return (vec![0; v.len()], 1.0, 0);
-    }
-    let scale = (rmax - rmin) / 255.0;
-    let from_min = -128.0 - rmin / scale;
-    let from_max = 127.0 - rmax / scale;
-    let zp = if 128.0 + (rmin / scale).abs() < 127.0 + (rmax / scale).abs() { from_min } else { from_max };
-    let zp = if zp <= -128.0 {
-        -128
-    } else if zp >= 127.0 {
-        127
-    } else {
-        cvtt(zp.round(), false) as i8 as i32
-    };
-    let sf = scale as f32;
-    let inv = (1.0 / sf as f64) as f32;
-    let q = v.iter().map(|&x| (cvtt((zp as f32 + x * inv).round() as f64, false) as i32).clamp(-128, 127)).collect();
-    (q, sf, zp)
-}
-
-/// tensor_utils::ApplyActivationToVector
-fn apply_activation(v: &mut [f32], act: Act) {
-    // std::max(a, std::min(x, b)) on NaN: min gives NaN, max gives a
-    let clamp = |x: f32, a: f32, b: f32| {
-        let m = if b < x { b } else { x };
-        if a < m { m } else { a }
-    };
-    match act {
-        Act::None => {}
-        Act::Relu => v.iter_mut().for_each(|x| *x = if 0.0 < *x { *x } else { 0.0 }),
-        Act::ReluN1To1 => v.iter_mut().for_each(|x| *x = clamp(*x, -1.0, 1.0)),
-        Act::Relu6 => v.iter_mut().for_each(|x| *x = clamp(*x, 0.0, 6.0)),
-        Act::Tanh => v.iter_mut().for_each(|x| *x = eigen::tanh(*x)),
-        Act::SignBit => v.iter_mut().for_each(|x| *x = x.is_sign_negative() as u8 as f32),
     }
 }
 

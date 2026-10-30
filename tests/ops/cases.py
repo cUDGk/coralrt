@@ -679,6 +679,43 @@ def sparse_cases():
   return out
 
 
+def rnn_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  # weights of one direction: float, or 8-bit with a scale (hybrid)
+  def weights(units, isz, wt, seed):
+    if wt == "float32":
+      return T([units, isz], data=const([units, isz], "float32", seed, -0.6, 0.6)), T([units, units], data=const([units, units], "float32", seed + 1, -0.4, 0.4))
+    return (T([units, isz], wt, (0.01, 0), data=const([units, isz], wt, seed)), T([units, units], wt, (0.005, 0), data=const([units, units], wt, seed + 1)))
+  bias = lambda units, seed: T([units], data=const([units], "float32", seed, -0.5, 0.5))
+  for wt in ["float32", "int8", "uint8"]:
+    for asym in ([False] if wt == "float32" else [False, True]):
+      tag = f"{wt}_{int(asym)}"
+      w, r = weights(4, 3, wt, 500)
+      for act in ["NONE", "TANH", "RELU"] if wt == "float32" else ["TANH"]:
+        c(f"RNN_{tag}_{act}", "RNN", [T([2, 3]), w, r, bias(4, 502), T([2, 4], var=True)], [T([])],
+          ("RNNOptions", {"fusedActivationFunction": ACT[act], "asymmetricQuantizeInputs": asym}), invokes=3)
+      for tm, shape in [(True, [5, 2, 3]), (False, [2, 5, 3])]:
+        c(f"UNIDIRECTIONAL_SEQUENCE_RNN_{tag}_{int(tm)}", "UNIDIRECTIONAL_SEQUENCE_RNN", [T(shape), w, r, bias(4, 503), T([2, 4], var=True)], [T([])],
+          ("SequenceRNNOptions", {"timeMajor": tm, "fusedActivationFunction": ACT["TANH"], "asymmetricQuantizeInputs": asym}), invokes=2)
+      fw, fr = weights(4, 3, wt, 510)
+      bw, br = weights(5, 3, wt, 520)
+      for tm, shape in [(True, [4, 2, 3]), (False, [2, 4, 3])]:
+        for merge in [False, True]:
+          outs = [T([])] if merge else [T([]), T([])]
+          opts = ("BidirectionalSequenceRNNOptions", {"timeMajor": tm, "fusedActivationFunction": ACT["TANH"], "mergeOutputs": merge, "asymmetricQuantizeInputs": asym})
+          base = [T(shape), fw, fr, bias(4, 530), T([2, 4], var=True), bw, br, bias(5, 531), T([2, 5], var=True)]
+          c(f"BIDIRECTIONAL_SEQUENCE_RNN_{tag}_{int(tm)}{int(merge)}", "BIDIRECTIONAL_SEQUENCE_RNN", base + [None, None, None], outs, opts, invokes=2)
+          # aux input with its own weights (stacking), and without them (the backward pass's input)
+          if merge:
+            aux_shape = shape  # 2.5 finds the aux rows with the input size in places: same size
+            fa = T([4, 3], data=const([4, 3], "float32", 540)) if wt == "float32" else T([4, 3], wt, (0.01, 0), data=const([4, 3], wt, 540))
+            ba = T([5, 3], data=const([5, 3], "float32", 541)) if wt == "float32" else T([5, 3], wt, (0.01, 0), data=const([5, 3], wt, 541))
+            c(f"BIDIRECTIONAL_SEQUENCE_RNN_{tag}_{int(tm)}_aux", "BIDIRECTIONAL_SEQUENCE_RNN", base + [T(aux_shape), fa, ba], outs, opts, invokes=2)
+            c(f"BIDIRECTIONAL_SEQUENCE_RNN_{tag}_{int(tm)}_nonstacking", "BIDIRECTIONAL_SEQUENCE_RNN", base + [T(shape), None, None], outs, opts, invokes=2)
+  return out
+
+
 def all_cases():
   return (binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases() + nn_cases()
-          + lookup_cases() + control_cases() + complex_cases() + nms_cases() + sparse_cases())
+          + lookup_cases() + control_cases() + complex_cases() + nms_cases() + sparse_cases() + rnn_cases())

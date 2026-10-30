@@ -227,7 +227,7 @@ impl Conv2D {
         let mut q = Vec::with_capacity(x.len());
         let (mut scales, mut zps) = (Vec::new(), Vec::new());
         for row in x.chunks(per_batch.max(1)) {
-            let (v, s, zp) = super::dense::quantize_row(row, per_channel);
+            let (v, s, zp) = super::tensor_utils::quantize_row(row, per_channel);
             q.extend(v);
             scales.push(s);
             zps.push(zp);
@@ -373,7 +373,7 @@ impl Kernel for DepthwiseConv2D {
                 let per_batch = x.len() / g.batches.max(1);
                 let (mut q, mut scales, mut zps) = (Vec::with_capacity(x.len()), Vec::new(), Vec::new());
                 for row in x.chunks(per_batch.max(1)) {
-                    let (v, s, zp) = super::dense::quantize_row(row, true);
+                    let (v, s, zp) = super::tensor_utils::quantize_row(row, true);
                     q.extend(v.into_iter().map(|v| v as i64));
                     scales.push(s);
                     zps.push(zp as i64);

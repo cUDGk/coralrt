@@ -23,7 +23,9 @@ mod quant;
 mod reduce;
 mod resize;
 mod resource;
+mod rnn;
 mod shape;
+mod tensor_utils;
 mod unary;
 
 use crate::interp::Env;
@@ -69,7 +71,7 @@ pub trait Kernel: Send {
 }
 
 pub fn create(s: &OpSpec) -> Result<Box<dyn Kernel>> {
-    for module in [binary::create, complex::create, control::create, conv::create, data::create, dense::create, lookup::create, movement::create, nms::create, norm::create, pool::create, quant::create, reduce::create, resize::create, resource::create, shape::create, unary::create] {
+    for module in [binary::create, complex::create, control::create, conv::create, data::create, dense::create, lookup::create, movement::create, nms::create, norm::create, pool::create, quant::create, reduce::create, resize::create, resource::create, rnn::create, shape::create, unary::create] {
         if let Some(k) = module(s)? {
             return Ok(k);
         }
