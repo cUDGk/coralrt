@@ -87,6 +87,19 @@ pub fn mul_by_quantized_multiplier(x: i32, m: i32, shift: i32) -> i32 {
     rounding_divide_by_pot(srdhm(x.wrapping_mul(1 << l), m), r)
 }
 
+/// The requantization of the 8-bit GEMMs 2.5 runs through cpu_backend_gemm (fully connected, batch matmul,
+/// convolutions): ruy's portable kernel, which rounds once, (x * m + half) >> (31 - shift). The official Windows
+/// build rounds that way for int8 and uint8 alike (measured: its ruy has no AVX kernels compiled in). The one
+/// exception is uint8 on an x86 without AVX, which 2.5 sends to gemmlowp: the reference MultiplyByQuantizedMultiplier.
+pub fn gemm_requantize(x: i32, m: i32, shift: i32, uint8: bool) -> i32 {
+    #[cfg(target_arch = "x86_64")]
+    if uint8 && !std::arch::is_x86_feature_detected!("avx") {
+        return mul_by_quantized_multiplier(x, m, shift);
+    }
+    let total = 31 - shift;
+    ((x as i64 * m as i64 + (1i64 << (total - 1))) >> total) as i32
+}
+
 /// MultiplyByQuantizedMultiplier for an int64 accumulator (int16 kernels): the multiplier cut to 16 bits, one
 /// rounding shift
 pub fn mul_by_quantized_multiplier_i64(x: i64, m: i32, shift: i32) -> i32 {

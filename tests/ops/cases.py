@@ -428,6 +428,29 @@ def fc_cases():
       [T([b, 32], "uint8", (0.05, 128)), T([8, 32], "uint8", (0.02, 128), data=const([8, 32], "uint8", 15)),
        T([8], "int32", (0.001, 0), data=const([8], "int32", 16, -2000, 2000))],
       [T([], "int16", (0.003, 0)), T([b * 32], "uint8")], fco(fmt=1))
+  # many outputs, and a multiplier of exactly 1/4 that lands on halves: where the GEMMs' roundings part ways
+  for dt in ["uint8", "int8"]:
+    zp = 128 if dt == "uint8" else 0
+    for name, (sx, sw, so) in [("big", (0.05, 0.02, 0.1)), ("ties", (0.5, 0.5, 1.0))]:
+      c(f"FULLY_CONNECTED_{dt}_{name}", "FULLY_CONNECTED", [T([16, 64], dt, (sx, zp)), T([32, 64], dt, (sw, zp), data=const([32, 64], dt, 17)),
+                                                            T([32], "int32", (sx * sw, 0), data=const([32], "int32", 18, -5000, 5000))],
+        [T([], dt, (so, zp))], fco())
+  bmo = lambda ax, ay, asym=False:("BatchMatMulOptions", {"adjX": ax, "adjY": ay, "asymmetricQuantizeInputs": asym})
+  # (lhs shape, rhs shape) before adjoints: plain, broadcast batch, 4-D with two batch dimensions, 2-D
+  shapes = [([2, 3, 5], [2, 5, 4]), ([2, 3, 5], [5, 4]), ([1, 3, 5], [2, 5, 4]), ([2, 2, 3, 5], [2, 2, 5, 4]), ([3, 5], [5, 4])]
+  def adjoint(s, on):
+    return s[:-2] + [s[-1], s[-2]] if on else s
+  for k, (sa, sb) in enumerate(shapes):
+    for ax, ay in [(False, False), (True, False), (False, True), (True, True)]:
+      a, b = adjoint(sa, ax), adjoint(sb, ay)
+      c(f"BATCH_MATMUL_f32_{k}_{int(ax)}{int(ay)}", "BATCH_MATMUL", [T(a), T(b)], [T([])], bmo(ax, ay), tol=1e-5)
+      c(f"BATCH_MATMUL_int8_{k}_{int(ax)}{int(ay)}", "BATCH_MATMUL", [T(a, "int8", (0.05, 3)), T(b, "int8", (0.03, -2))], [T([], "int8", (0.1, 1))], bmo(ax, ay))
+      c(f"BATCH_MATMUL_int16_{k}_{int(ax)}{int(ay)}", "BATCH_MATMUL", [T(a, "int16", (0.001, 0)), T(b, "int16", (0.0005, 0))], [T([], "int16", (0.01, 0))], bmo(ax, ay))
+      for asym in [False, True]:
+        c(f"BATCH_MATMUL_hybrid_{k}_{int(ax)}{int(ay)}_{int(asym)}", "BATCH_MATMUL", [T(a), T(b, "int8", (0.02, 0), data=const(b, "int8", 20 + k))], [T([])],
+          bmo(ax, ay, asym))
+  for name, (sa, sb, so) in [("big", (0.05, 0.03, 0.1)), ("ties", (0.5, 0.5, 1.0))]:
+    c(f"BATCH_MATMUL_int8_{name}", "BATCH_MATMUL", [T([4, 16, 32], "int8", (sa, 0)), T([4, 32, 16], "int8", (sb, 0))], [T([], "int8", (so, 0))], bmo(False, False))
   return out
 
 
