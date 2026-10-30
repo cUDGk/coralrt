@@ -363,6 +363,16 @@ def nn_cases():
           c(f"{op}_{dt}_{k}_{act}", op, [T(shape, dt, q)], [T([], dt, q)],
             ("Pool2DOptions", {"padding": PAD[pad], "strideW": sw, "strideH": sh, "filterWidth": fw, "filterHeight": fh,
                                "fusedActivationFunction": ACT[act]}))
+  # (input shape, output size): down, up, exactly 2x (float's own kernel), exactly 8x with 8 channels (uint8's own)
+  sizes = [([1, 5, 7, 3], [3, 4]), ([2, 3, 4, 2], [7, 9]), ([1, 3, 4, 3], [6, 8]), ([1, 2, 3, 8], [16, 24]), ([1, 1, 1, 2], [4, 3])]
+  for op, opt in [("RESIZE_BILINEAR", "ResizeBilinearOptions"), ("RESIZE_NEAREST_NEIGHBOR", "ResizeNearestNeighborOptions")]:
+    for dt in ["float32", "uint8", "int8", "int16"]:
+      q = (Q[dt][0], 0) if dt == "int16" else Q.get(dt)
+      for k, (shape, size) in enumerate(sizes):
+        for align, half in [(False, False), (True, False), (False, True)]:
+          c(f"{op}_{dt}_{k}_{int(align)}{int(half)}", op, [T(shape, dt, q), T([2], "int32", data=size)], [T([], dt, q)],
+            (opt, {"alignCorners": align, "halfPixelCenters": half}))
+    c(f"{op}_size_input", op, [T([1, 3, 3, 2]), T([2], "int32", value=[5, 2])], [T([])], (opt, {"alignCorners": False, "halfPixelCenters": True}))
   return out
 
 
