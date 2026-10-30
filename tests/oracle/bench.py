@@ -2,16 +2,23 @@
 hit both alike: each round runs every model in one process per side, the median of the rounds is reported.
 Only invoke() is timed, as pycoral's examples do.
 
-  python -I bench.py <official python> <coralrt python> <test_data dir> [rounds] [invokes]
+  python -I bench.py <official python> <coralrt python> <test_data dir> [rounds] [invokes] [official edgetpu.dll]
+
+The official side loads edgetpu.dll from the system (the throttled build, 250 MHz) unless given one, e.g. the direct
+build (500 MHz); compare that with CORALRT_PERFORMANCE=max.
 """
 import json, os, statistics, subprocess, sys, time
 
 if sys.argv[1] == "--worker":
   from pycoral.utils.edgetpu import make_interpreter
-  data, n = sys.argv[2], int(sys.argv[3])
+  data, n, dll = sys.argv[2], int(sys.argv[3]), sys.argv[4] if len(sys.argv) > 4 else None
+  delegate = None
+  if dll:
+    from tflite_runtime.interpreter import load_delegate
+    delegate = load_delegate(dll)
   out = {}
   for model in sorted(f for f in os.listdir(data) if f.endswith("_edgetpu.tflite")):
-    it = make_interpreter(os.path.join(data, model))
+    it = make_interpreter(os.path.join(data, model), delegate=delegate)
     it.allocate_tensors()
     for _ in range(10):
       it.invoke()
@@ -27,10 +34,12 @@ if sys.argv[1] == "--worker":
 official, coralrt, data = sys.argv[1:4]
 rounds = int(sys.argv[4]) if len(sys.argv) > 4 else 5
 n = sys.argv[5] if len(sys.argv) > 5 else "200"
+dll = sys.argv[6:7]
 ms = {"official": [], "coralrt": []}
 for r in range(rounds):
   for who, py in [("official", official), ("coralrt", coralrt)][:: 1 if r % 2 == 0 else -1]:
-    run = subprocess.run([py, "-I", os.path.abspath(__file__), "--worker", data, n], capture_output=True, text=True, timeout=600)
+    extra = dll if who == "official" else []
+    run = subprocess.run([py, "-I", os.path.abspath(__file__), "--worker", data, n] + extra, capture_output=True, text=True, timeout=600)
     if run.returncode:
       sys.exit(f"{who}: {run.stderr}")
     ms[who].append(json.loads(run.stdout.strip().splitlines()[-1]))

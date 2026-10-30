@@ -298,3 +298,33 @@ impl Interpreter {
         Ok(())
     }
 }
+
+/// These need a stick and the recorded official outputs (tests/oracle/dump_pycoral.py):
+/// `cargo test --release -- --ignored`
+#[cfg(test)]
+mod device_tests {
+    use super::*;
+    use std::time::Duration;
+
+    const ROOT: &str = env!("CARGO_MANIFEST_DIR");
+
+    #[test]
+    #[ignore]
+    fn a_failed_run_is_recovered_by_the_next_one() {
+        let model = format!("{ROOT}/../test_data/mobilenet_v2_1.0_224_inat_bird_quant_edgetpu.tflite");
+        let input = std::fs::read(format!("{ROOT}/target/oracle/classify_photo.in.bin")).unwrap();
+        let want = std::fs::read(format!("{ROOT}/target/oracle/classify_photo.out0.bin")).unwrap();
+        let mut it = Interpreter::from_file(model, &Options::default()).unwrap();
+        it.set_input(0, &input).unwrap();
+        let dev = it.device().unwrap().clone();
+        for _ in 0..3 {
+            // the transfers time out midway: the chip is left with data in flight
+            dev.lock().timeout = Duration::from_millis(1); // libusb counts in ms, and 0 means no timeout
+            let err = it.invoke().unwrap_err();
+            assert!(err.0.contains("timed out"), "{err}");
+            dev.lock().timeout = Duration::from_secs(6);
+            it.invoke().unwrap();
+            assert!(it.output(0).unwrap() == want.as_slice(), "the run after the failure gave other bytes");
+        }
+    }
+}

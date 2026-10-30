@@ -175,6 +175,8 @@ pub struct EdgeTpu {
     cached_token: u64,
     /// a transfer failed: drain the pipes and re-initialize the chip before the next run
     needs_recovery: bool,
+    /// for the bulk transfers of a run (the tests shorten it to make a run fail midway)
+    pub(crate) timeout: Duration,
 }
 
 impl EdgeTpu {
@@ -204,7 +206,7 @@ impl EdgeTpu {
         if usb.control_in(0xC0, 1, (reg::SCU_CTRL_0 & 0xffff) as u16, (reg::SCU_CTRL_0 >> 16) as u16, 4, 500).is_err() {
             return Err(Error("the Edge TPU does not answer: replug it".into()));
         }
-        let mut tpu = EdgeTpu { usb, path, performance, usb_speed, cached_token: 0, needs_recovery: false };
+        let mut tpu = EdgeTpu { usb, path, performance, usb_speed, cached_token: 0, needs_recovery: false, timeout: TIMEOUT };
         tpu.init()?;
         Ok(tpu)
     }
@@ -405,7 +407,7 @@ impl EdgeTpu {
                 }
             }
             let mut ins = vec![InStream::new(EP_DATA_IN, chunks), InStream::new(EP_EVENT_IN, vec![16; seg.interrupts.len()])];
-            self.usb.bulk_batch(&seg.outs, &mut ins, TIMEOUT)?;
+            self.usb.bulk_batch(&seg.outs, &mut ins, self.timeout)?;
             let mut at = 0;
             for h in &seg.data {
                 if let Hint::Dma { name, offset, size, .. } = h {
