@@ -2,6 +2,7 @@
 
 use crate::fb::{at, Table};
 use crate::{flex, Error, Result};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DType {
@@ -126,8 +127,9 @@ pub struct Executable {
     pub ty: ExeType,
     pub batch_size: usize,
     pub scratch_size: usize,
-    pub bitstreams: Vec<Vec<u8>>,
-    pub parameters: Vec<u8>,
+    /// shared with the usb transfers that send them, which then need no copy
+    pub bitstreams: Vec<Arc<Vec<u8>>>,
+    pub parameters: Arc<Vec<u8>>,
     pub hints: Vec<Hint>,
     pub fully_deterministic: bool,
     pub inputs: Vec<Layer>,
@@ -216,8 +218,8 @@ pub fn parse_executable(buf: &[u8]) -> Result<Executable> {
         ty,
         batch_size: e.get::<i32>(3, 1).max(1) as usize,
         scratch_size: e.get::<i32>(4, 0) as usize,
-        bitstreams: e.tables(5).into_iter().map(|b| b.bytes(0).to_vec()).collect(),
-        parameters: e.bytes(6).to_vec(),
+        bitstreams: e.tables(5).into_iter().map(|b| Arc::new(b.bytes(0).to_vec())).collect(),
+        parameters: Arc::new(e.bytes(6).to_vec()),
         hints,
         fully_deterministic: dh.is_some_and(|d| d.get::<u8>(1, 0) != 0),
         inputs: e.tables(8).into_iter().map(layer).collect::<Result<_>>()?,

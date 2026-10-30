@@ -106,7 +106,7 @@ impl EdgeTpuOp {
             let mut inputs = HashMap::new();
             for (l, data) in e.inputs.iter().zip(ins) {
                 let n = l.actual_size_bytes();
-                inputs.insert(l.name.as_str(), host_input(l, &data[b * n..(b + 1) * n]));
+                inputs.insert(l.name.as_str(), std::sync::Arc::new(host_input(l, &data[b * n..(b + 1) * n])));
             }
             let mut outputs = HashMap::new();
             tpu.run(e, &inputs, &mut outputs)?;

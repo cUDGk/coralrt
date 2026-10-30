@@ -10,7 +10,8 @@
 
 use crate::{Error, Result};
 use std::ffi::{c_char, c_int, c_long, c_uint, c_void, CStr};
-use std::sync::OnceLock;
+use std::ops::Range;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 type Ptr = *mut c_void;
@@ -289,7 +290,7 @@ impl Handle {
     /// produces the INs while it consumes the OUTs). Each `InStream` is a byte stream on its endpoint:
     /// a short packet ends every device DMA, so one transfer can end early and the next one continues
     /// the stream; transfers are resubmitted until `want` bytes arrived.
-    pub fn bulk_batch(&self, outs: &[(u8, &[u8])], ins: &mut [InStream], timeout: Duration) -> Result<()> {
+    pub fn bulk_batch(&self, outs: &[(u8, OutBuf)], ins: &mut [InStream], timeout: Duration) -> Result<()> {
         let mut b = Batch { c: self.c, h: self.h, slots: Vec::new() };
         let r = b.run(outs, ins, timeout);
         b.free();
@@ -323,10 +324,20 @@ impl InStream {
     }
 }
 
+/// The bytes of a bulk OUT: a range of a shared buffer. Nothing is copied, and the transfer holds the buffer alive
+/// for as long as libusb may read it (see Batch::free).
+#[derive(Clone)]
+pub struct OutBuf(pub Arc<Vec<u8>>, pub Range<usize>);
+
+enum Data {
+    In(Vec<u8>),
+    Out(OutBuf),
+}
+
 struct Slot {
     t: *mut Transfer,
     done: Box<c_int>,
-    buf: Vec<u8>,
+    data: Data,
     /// index of the InStream this IN feeds, None for an OUT
     stream: Option<usize>,
     order: usize,
@@ -344,13 +355,18 @@ extern "system" fn on_done(t: *mut Transfer) {
 }
 
 impl Batch<'_> {
-    fn submit(&mut self, ep: u8, buf: Vec<u8>, len: usize, stream: Option<usize>, order: usize, timeout_ms: u32) -> Result<()> {
+    fn submit(&mut self, ep: u8, mut data: Data, stream: Option<usize>, order: usize, timeout_ms: u32) -> Result<()> {
         // SAFETY: a fresh transfer without iso packets
         let t = unsafe { (self.c.lib.alloc_transfer)(0) };
         if t.is_null() {
             return Err(Error("libusb_alloc_transfer failed".into()));
         }
-        let mut slot = Slot { t, done: Box::new(0), buf, stream, order };
+        // libusb only reads the buffer of an OUT; the heap memory stays put when `data` moves into the slot
+        let (buffer, len) = match &mut data {
+            Data::In(v) => (v.as_mut_ptr(), v.len()),
+            Data::Out(OutBuf(b, r)) => (b[r.clone()].as_ptr() as *mut u8, r.len()),
+        };
+        let mut slot = Slot { t, done: Box::new(0), data, stream, order };
         // SAFETY: t is a valid transfer; the buffer and the flag outlive it (both owned by the slot)
         unsafe {
             *t = Transfer {
@@ -364,7 +380,7 @@ impl Batch<'_> {
                 actual_length: 0,
                 callback: on_done,
                 user_data: &mut *slot.done as *mut c_int as Ptr,
-                buffer: slot.buf.as_mut_ptr(),
+                buffer,
                 num_iso_packets: 0,
             };
         }
@@ -388,17 +404,17 @@ impl Batch<'_> {
         unsafe { (self.c.lib.handle_events_timeout_completed)(self.c.ctx, &tv, &mut completed) };
     }
 
-    fn run(&mut self, outs: &[(u8, &[u8])], ins: &mut [InStream], timeout: Duration) -> Result<()> {
+    fn run(&mut self, outs: &[(u8, OutBuf)], ins: &mut [InStream], timeout: Duration) -> Result<()> {
         let tmo = timeout.as_millis() as u32;
         let mut order = 0;
         for (i, s) in ins.iter().enumerate() {
             for &n in &s.chunks {
-                self.submit(s.ep, vec![0; n], n, Some(i), order, tmo)?;
+                self.submit(s.ep, Data::In(vec![0; n]), Some(i), order, tmo)?;
                 order += 1;
             }
         }
-        for &(ep, data) in outs {
-            self.submit(ep, data.to_vec(), data.len(), None, 0, tmo)?;
+        for (ep, data) in outs {
+            self.submit(*ep, Data::Out(data.clone()), None, 0, tmo)?;
         }
         let deadline = Instant::now() + timeout;
         // SAFETY (status reads): only of completed transfers
@@ -419,7 +435,7 @@ impl Batch<'_> {
                     let got: usize = mine().map(|x| unsafe { (*x.t).actual_length } as usize).sum();
                     if got < s.want {
                         order += 1;
-                        self.submit(s.ep, vec![0; s.want - got], s.want - got, Some(i), order, tmo)?;
+                        self.submit(s.ep, Data::In(vec![0; s.want - got]), Some(i), order, tmo)?;
                     }
                 }
             }
@@ -447,7 +463,9 @@ impl Batch<'_> {
             for x in mine {
                 // SAFETY: completed transfer
                 let n = unsafe { (*x.t).actual_length } as usize;
-                s.got.extend_from_slice(&x.buf[..n]);
+                if let Data::In(buf) = &x.data {
+                    s.got.extend_from_slice(&buf[..n]);
+                }
             }
         }
         for s in &self.slots {

@@ -3,9 +3,10 @@
 //! (beagle_top_level_handler.cc), by way of tinycoral's coral/device.py, dfu.py and runtime.py.
 
 use crate::exe::{Desc, Executable, Hint};
-use crate::usb::{self, Backend, Handle, InStream};
+use crate::usb::{self, Backend, Handle, InStream, OutBuf};
 use crate::{Error, Result};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const DFU: (u16, u16) = (0x1a6e, 0x089a);
@@ -316,7 +317,7 @@ impl EdgeTpu {
 
     /// Run one executable. `inputs` maps input layer names to their (padded) bytes; returns the bytes of each output layer
     /// (padded, as the chip lays them out). Parameters of a caching executable stay in the chip until another token replaces them.
-    pub fn run(&mut self, exe: &Executable, inputs: &HashMap<&str, Vec<u8>>, outputs: &mut HashMap<String, Vec<u8>>) -> Result<()> {
+    pub fn run(&mut self, exe: &Executable, inputs: &HashMap<&str, Arc<Vec<u8>>>, outputs: &mut HashMap<String, Vec<u8>>) -> Result<()> {
         if self.needs_recovery {
             self.recover()?;
         }
@@ -345,20 +346,19 @@ impl EdgeTpu {
     /// (outputs, interrupts) due before the next OUT. Within a segment every IN is queued before the OUTs; a segment's OUTs
     /// only start once all earlier INs completed: in single endpoint mode a bulk OUT can block a pending bulk IN until the
     /// device deadlocks (libedgetpu usb_driver.cc enforces the same order). A fence closes the segment.
-    fn run_hints(&mut self, exe: &Executable, inputs: &HashMap<&str, Vec<u8>>, outputs: &mut HashMap<String, Vec<u8>>) -> Result<()> {
+    fn run_hints(&mut self, exe: &Executable, inputs: &HashMap<&str, Arc<Vec<u8>>>, outputs: &mut HashMap<String, Vec<u8>>) -> Result<()> {
         struct Segment<'h> {
-            outs: Vec<Vec<u8>>,
+            outs: Vec<(u8, OutBuf)>,
             data: Vec<&'h Hint>,
             interrupts: Vec<u8>,
         }
         let new_seg = || Segment { outs: Vec::new(), data: Vec::new(), interrupts: Vec::new() };
         let mut segs = vec![new_seg()];
-        let packet = |tag: u32, data: &[u8]| {
-            let mut p = Vec::with_capacity(8 + data.len());
-            p.extend_from_slice(&(data.len() as u32).to_le_bytes());
-            p.extend_from_slice(&tag.to_le_bytes());
-            p.extend_from_slice(data);
-            p
+        // the 8 byte header (length, tag) in a transfer of its own, then the data where it lies, like libedgetpu
+        let packet = |seg: &mut Segment, tag: u32, data: &Arc<Vec<u8>>, range: std::ops::Range<usize>| {
+            let header = [(range.len() as u32).to_le_bytes(), tag.to_le_bytes()].concat();
+            seg.outs.push((EP_OUT, OutBuf(Arc::new(header), 0..8)));
+            seg.outs.push((EP_OUT, OutBuf(data.clone(), range)));
         };
         for h in &exe.hints {
             let seg = segs.last_mut().unwrap();
@@ -372,7 +372,7 @@ impl EdgeTpu {
             match h {
                 Hint::Instruction(i) => {
                     let bs = exe.bitstreams.get(*i).ok_or_else(|| Error(format!("instruction chunk {i} missing")))?;
-                    seg.outs.push(packet(TAG_INSTRUCTIONS, bs));
+                    packet(seg, TAG_INSTRUCTIONS, bs, 0..bs.len());
                 }
                 Hint::Dma { outfeed: false, desc, name, offset, size } => {
                     let (src, tag) = match desc {
@@ -380,10 +380,10 @@ impl EdgeTpu {
                         Desc::Parameter => (&exe.parameters, TAG_PARAMETERS),
                         d => return Err(Error(format!("{d:?} DMAs to the device are not supported"))),
                     };
-                    let data = src.get(*offset..offset + size).ok_or_else(|| {
-                        Error(format!("{desc:?} {name:?} has {} bytes, the program reads {size} at {offset}", src.len()))
-                    })?;
-                    seg.outs.push(packet(tag, data));
+                    if src.len() < offset + size {
+                        return Err(Error(format!("{desc:?} {name:?} has {} bytes, the program reads {size} at {offset}", src.len())));
+                    }
+                    packet(seg, tag, src, *offset..offset + size);
                 }
                 Hint::Dma { outfeed: true, desc: Desc::Output, .. } => seg.data.push(h),
                 Hint::Dma { outfeed: true, desc, .. } => return Err(Error(format!("{desc:?} DMAs from the device are not supported"))),
@@ -405,8 +405,7 @@ impl EdgeTpu {
                 }
             }
             let mut ins = vec![InStream::new(EP_DATA_IN, chunks), InStream::new(EP_EVENT_IN, vec![16; seg.interrupts.len()])];
-            let outs: Vec<(u8, &[u8])> = seg.outs.iter().map(|p| (EP_OUT, p.as_slice())).collect();
-            self.usb.bulk_batch(&outs, &mut ins, TIMEOUT)?;
+            self.usb.bulk_batch(&seg.outs, &mut ins, TIMEOUT)?;
             let mut at = 0;
             for h in &seg.data {
                 if let Hint::Dma { name, offset, size, .. } = h {
