@@ -581,6 +581,46 @@ def lookup_cases():
   return out
 
 
+def control_cases():
+  from spec import Case, Graph, Op
+  out = []
+  add = ("AddOptions", {"fusedActivationFunction": 0})
+  ifo = ("IfOptions", {"thenSubgraphIndex": 1, "elseSubgraphIndex": 2})
+  whileo = ("WhileOptions", {"condSubgraphIndex": 1, "bodySubgraphIndex": 2})
+  # IF: then adds, else multiplies; a new random condition each run
+  main = Graph([T([1], "bool"), T([3]), T([3]), T([])], [Op("IF", [0, 1, 2], [3], ifo)], [0, 1, 2], [3], "main")
+  then = Graph([T([3]), T([3]), T([3])], [Op("ADD", [0, 1], [2], add)], [0, 1], [2], "then")
+  other = Graph([T([3]), T([3]), T([3])], [Op("MUL", [0, 1], [2], ("MulOptions", {"fusedActivationFunction": 0}))], [0, 1], [2], "else")
+  out.append(Case("IF_add_or_mul", [main, then, other], invokes=6))
+  # branches of different output shapes: sized while running
+  then = Graph([T([3]), T([3]), T([6])], [Op("CONCATENATION", [0, 1], [2], ("ConcatenationOptions", {"axis": 0, "fusedActivationFunction": 0}))], [0, 1], [2], "then")
+  out.append(Case("IF_dynamic", [main, then, other], invokes=6))
+  # WHILE: count up to 5, doubling the values
+  main = Graph([T([], "int32", gen=("int", 0, 6)), T([2]), T([], "int32"), T([2])], [Op("WHILE", [0, 1], [2, 3], whileo)], [0, 1], [2, 3], "main")
+  cond = Graph([T([], "int32"), T([2]), T([], "int32", data=5), T([], "bool")], [Op("LESS", [0, 2], [3])], [0, 1], [3], "cond")
+  body = Graph([T([], "int32"), T([2]), T([], "int32", data=1), T([], "int32"), T([2])], [Op("ADD", [0, 2], [3], add), Op("ADD", [1, 1], [4], add)], [0, 1], [3, 4], "body")
+  out.append(Case("WHILE_count", [main, cond, body], invokes=4))
+  # a body that grows a value: sized while running
+  main = Graph([T([], "int32", gen=("int", 0, 4)), T([1]), T([], "int32"), T([])], [Op("WHILE", [0, 1], [2, 3], whileo)], [0, 1], [2, 3], "main")
+  cond = Graph([T([], "int32"), T([1]), T([], "int32", data=4), T([], "bool")], [Op("LESS", [0, 2], [3])], [0, 1], [3], "cond")
+  body = Graph([T([], "int32"), T([1]), T([], "int32", data=1), T([], "int32"), T([1], data=[0.5]), T([])],
+               [Op("ADD", [0, 2], [3], add), Op("CONCATENATION", [1, 4], [5], ("ConcatenationOptions", {"axis": 0, "fusedActivationFunction": 0}))], [0, 1], [3, 5], "body")
+  out.append(Case("WHILE_grow", [main, cond, body], invokes=3))
+  # CALL_ONCE fills a hash table the main graph then reads, run after run
+  for name, (kt, vt, keys, values, default, gen) in {
+      "int64_string": ("int64", "string", [1, 2, 2, 5], [b"a", b"b", b"bb", b"e"], [b"none"], ("int", 0, 6)),
+      "string_int64": ("string", "int64", [b"x", b"y", b"x", b"zz"], [10, 20, 30, 40], [-1], ("choice", [b"x", b"y", b"zz", b"w"])),
+  }.items():
+    hto = ("HashtableOptions", {"tableId": 7, "keyDtype": TT[kt], "valueDtype": TT[vt]})
+    main = Graph([T([3], kt, gen=gen), T([1], "resource"), T([1], vt, data=default), T([], vt), T([], "int64")],
+                 [Op("CALL_ONCE", [], [], ("CallOnceOptions", {"initSubgraphIndex": 1})), Op("HASHTABLE", [], [1], hto), Op("HASHTABLE_FIND", [1, 0, 2], [3]),
+                  Op("HASHTABLE_SIZE", [1], [4])], [0], [3, 4], "main")
+    init = Graph([T([1], "resource"), T([4], kt, data=keys), T([4], vt, data=values)], [Op("HASHTABLE", [], [0], hto), Op("HASHTABLE_IMPORT", [0, 1, 2], [])],
+                 [], [], "init")
+    out.append(Case(f"CALL_ONCE_HASHTABLE_{name}", [main, init], invokes=3))
+  return out
+
+
 def all_cases():
   return (binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases() + nn_cases()
-          + lookup_cases())
+          + lookup_cases() + control_cases())

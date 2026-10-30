@@ -84,7 +84,8 @@ fn compare(want: &[u8], got: &[u8], dtype: &str, tol: f64) -> Option<String> {
     Some(format!("{diff} of {} bytes differ, first at {:?} (sizes {} vs {})", want.len(), (0..n).find(|&i| want[i] != got[i]), got.len(), want.len()))
 }
 
-fn run(dir: &Path, name: &str, tol: f64, invokes: usize, ins: &[(Vec<usize>, String)], outs: &[(Vec<usize>, String)]) -> coralrt::Result<Vec<String>> {
+/// `outs`: the outputs' shapes and types per invoke
+fn run(dir: &Path, name: &str, tol: f64, invokes: usize, ins: &[(Vec<usize>, String)], outs: &[Vec<(Vec<usize>, String)>]) -> coralrt::Result<Vec<String>> {
     let oracle = dir.join("oracle");
     let mut it = Interpreter::from_file(dir.join("models").join(format!("{name}.tflite")), &Options::default())?;
     for (k, (shape, _)) in ins.iter().enumerate() {
@@ -106,7 +107,7 @@ fn run(dir: &Path, name: &str, tol: f64, invokes: usize, ins: &[(Vec<usize>, Str
             }
         }
         it.invoke()?;
-        for (k, (shape, dtype)) in outs.iter().enumerate() {
+        for (k, (shape, dtype)) in outs[inv.min(outs.len().saturating_sub(1))].iter().enumerate() {
             let want = std::fs::read(oracle.join(format!("{name}.{inv}.out{k}.bin"))).map_err(|e| coralrt::Error(e.to_string()))?;
             let t = it.tensor(*it.outputs().get(k).ok_or_else(|| coralrt::Error(format!("no output {k}")))?);
             if t.shape != *shape || type_name(t.dtype) != dtype {
@@ -134,7 +135,7 @@ fn main() {
             continue;
         }
         let (tol, invokes): (f64, usize) = (f[2].parse().unwrap(), f[3].parse().unwrap());
-        let (ins, outs) = (descs(f[4]), descs(f[5]));
+        let (ins, outs) = (descs(f[4]), f[5].split('|').map(descs).collect::<Vec<_>>());
         match status {
             "load_error" => skipped += 1,
             "run_error" => match run(dir, name, tol, invokes, &ins, &outs) {

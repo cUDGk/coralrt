@@ -6,7 +6,8 @@ comes out for op_check (examples/op_check.rs). Needs the official Python (pycora
 <out dir>/oracle/manifest.txt, one line per case, tab separated:
   case  status  tol  invokes  inputs  outputs  message
 status: ok, load_error (2.5 cannot read the model: not a case), run_error (2.5 refuses it: coralrt must too);
-inputs / outputs: "shape:dtype" separated by ";" with shapes like 2x3 (empty for a scalar).
+inputs / outputs: "shape:dtype" separated by ";" with shapes like 2x3 (empty for a scalar); the outputs once per invoke,
+separated by "|" (a dynamic output's shape can change from one invoke to the next).
 Files: <case>.<invoke>.in<k>.bin and <case>.<invoke>.out<k>.bin (strings in TFLite's string layout).
 """
 import os, subprocess, sys, tempfile
@@ -37,7 +38,7 @@ def record(case, models, oracle):
   path = os.path.join(models, case.name + ".tflite")
   g = case.graphs[0]
   ins = [g.tensors[i] for i in g.inputs]
-  status, msg, in_desc, out_desc = "ok", "", [], []
+  status, msg, in_desc, out_descs = "ok", "", [], []
   try:
     it = Interpreter(model_path=path)
   except Exception as e:
@@ -68,9 +69,10 @@ def record(case, models, oracle):
         with open(os.path.join(oracle, f"{case.name}.{inv}.out{k}.bin"), "wb") as f:
           f.write(tensor_bytes(name, v))
         out_desc.append(fmt(np.shape(v), name))
+      out_descs.append(";".join(out_desc))
   except Exception as e:
     status, msg = "run_error", (str(e).strip().splitlines() or [type(e).__name__])[-1][:200]
-  return TAB.join([case.name, status, str(case.tol), str(case.invokes), ";".join(in_desc), ";".join(out_desc), msg])
+  return TAB.join([case.name, status, str(case.tol), str(case.invokes), ";".join(in_desc), "|".join(out_descs), msg])
 
 
 def worker(out, names):
