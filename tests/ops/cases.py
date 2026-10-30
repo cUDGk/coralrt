@@ -636,6 +636,23 @@ def complex_cases():
   return out
 
 
+def nms_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  sc = lambda v: T([], data=v)
+  # few distinct scores, so equal scores leave the priority queue in its heap order
+  scores = ("choice", [0.9, 0.8, 0.8, 0.7, 0.5, 0.5, 0.3, 0.1])
+  for k, (n, max_out, iou, thr) in enumerate([(10, 5, 0.5, 0.2), (30, 40, 0.3, 0.0), (12, 0, 0.5, 0.2), (25, 8, 0.7, 0.45)]):
+    ins = [T([n, 4], gen=("uniform", 0.0, 1.0)), T([n], gen=scores), T([], "int32", data=max_out), sc(iou), sc(thr)]
+    c(f"NON_MAX_SUPPRESSION_V4_{k}", "NON_MAX_SUPPRESSION_V4", ins, [T([], "int32"), T([], "int32")], invokes=3)
+    c(f"NON_MAX_SUPPRESSION_V5_{k}", "NON_MAX_SUPPRESSION_V5", ins + [sc(0.5)], [T([], "int32"), T([]), T([], "int32")], invokes=3)
+  c("NON_MAX_SUPPRESSION_V5_hard", "NON_MAX_SUPPRESSION_V5", [T([20, 4], gen=("uniform", 0.0, 1.0)), T([20], gen=scores), T([], "int32", data=10), sc(0.4), sc(0.1),
+                                                               sc(0.0)], [T([], "int32"), T([]), T([], "int32")], invokes=3)
+  c("NON_MAX_SUPPRESSION_V4_size_input", "NON_MAX_SUPPRESSION_V4", [T([10, 4], gen=("uniform", 0.0, 1.0)), T([10], gen=scores), T([], "int32", value=4), sc(0.5),
+                                                                   sc(0.2)], [T([], "int32"), T([], "int32")])
+  return out
+
+
 def all_cases():
   return (binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases() + nn_cases()
-          + lookup_cases() + control_cases() + complex_cases())
+          + lookup_cases() + control_cases() + complex_cases() + nms_cases())
