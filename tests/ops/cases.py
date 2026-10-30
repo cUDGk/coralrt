@@ -92,7 +92,57 @@ def reduce_cases():
 
 
 def unary_cases():
-  return [op_case("SQRT_f32", "SQRT", [T([3, 40], gen=("uniform", 0, 100))], [T([3, 40])])]
+  out = []
+  f = lambda name, op, gen=None, opts=None, shape=(4, 75): out.append(op_case(name, op, [T(list(shape), gen=gen)], [T(list(shape))], opts))
+  f("ABS_f32", "ABS")
+  f("NEG_f32", "NEG")
+  f("EXP_f32", "EXP", ("uniform", -20, 20))
+  f("LOG_f32", "LOG", ("uniform", 0.001, 100))
+  f("SIN_f32", "SIN", ("uniform", -10, 10))
+  f("COS_f32", "COS", ("uniform", -10, 10))
+  f("SQRT_f32", "SQRT", ("uniform", 0, 100))
+  f("RSQRT_f32", "RSQRT", ("uniform", 0.01, 100))
+  f("SQUARE_f32", "SQUARE")
+  for op in ["CEIL", "FLOOR"]:
+    f(f"{op}_f32", op)
+    # a length that leaves a tail after the packets of 4, and signed zeros
+    f(f"{op}_f32_tail", op, ("choice", [-0.0, 0.0, -0.3, -0.7, 0.3, 0.7, -1.5, 2.5, 1e9, -1e9]), shape=(3, 7))
+  f("ROUND_f32", "ROUND", ("choice", [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5, -3.49, 7.51, 0.0, -0.0, 1e10, 2.4]))
+  f("ROUND_f32_random", "ROUND")
+  for op in ["RELU", "RELU_N1_TO_1", "RELU6", "HARD_SWISH", "ELU"]:
+    f(f"{op}_f32", op, ("uniform", -8, 8))
+  for alpha in [0.2, -0.5, 1.5]:
+    f(f"LEAKY_RELU_f32_{alpha}", "LEAKY_RELU", None, ("LeakyReluOptions", {"alpha": alpha}))
+  f("TANH_f32", "TANH", ("uniform", -10, 10))
+  f("TANH_f32_small", "TANH", ("uniform", -0.001, 0.001))
+  f("LOGISTIC_f32", "LOGISTIC", ("uniform", -20, 20))
+  f("LOGISTIC_f32_far", "LOGISTIC", ("uniform", -100, -9))
+  q = lambda name, op, dt, qi, qo, opts=None, gen=None: out.append(op_case(name, op, [T([4, 75], dt, qi, gen=gen)], [T([4, 75], dt, qo)], opts))
+  for dt in ["int8", "int16"]:
+    q(f"ABS_{dt}_same", "ABS", dt, Q[dt], Q[dt])
+    q(f"ABS_{dt}_rescale", "ABS", dt, Q[dt], QO[dt])
+  q("RSQRT_int8", "RSQRT", "int8", (0.05, -100), (0.02, -128), gen=("int", -100, 127))
+  for dt in ["uint8", "int8", "int16"]:
+    for op in ["RELU", "RELU6"] + (["RELU_N1_TO_1"] if dt != "int16" else []):
+      q(f"{op}_{dt}", op, dt, Q[dt], QO[dt])
+      q(f"{op}_{dt}_same", op, dt, Q[dt], Q[dt])
+    for alpha in [0.2, -0.5]:
+      q(f"LEAKY_RELU_{dt}_{alpha}", "LEAKY_RELU", dt, Q[dt], QO[dt], ("LeakyReluOptions", {"alpha": alpha}))
+  for dt in ["uint8", "int8"]:
+    for k, (qi, qo) in enumerate([(Q[dt], QO[dt]), (Q2[dt], Q[dt]), ((0.1, Q[dt][1]), (0.02, QO[dt][1]))]):
+      q(f"HARD_SWISH_{dt}_{k}", "HARD_SWISH", dt, qi, qo)
+    q(f"TANH_{dt}", "TANH", dt, Q[dt], (1 / 128, 128 if dt == "uint8" else 0))
+    q(f"LOGISTIC_{dt}", "LOGISTIC", dt, Q[dt], (1 / 256, 0 if dt == "uint8" else -128))
+  q("ELU_int8", "ELU", "int8", Q["int8"], QO["int8"])
+  for name, s in [("pot", 1 / 4096), ("pot2", 1 / 2048), ("other", 0.0007)]:
+    for op in ["TANH", "LOGISTIC"]:
+      q(f"{op}_int16_{name}", op, "int16", (s, 0), (1 / 32768, 0))
+  for dt in ["int32", "int64"]:
+    out.append(op_case(f"NEG_{dt}", "NEG", [T([4, 30], dt)], [T([4, 30], dt)]))
+  out.append(op_case("LOGICAL_NOT", "LOGICAL_NOT", [T([4, 30], "bool")], [T([4, 30], "bool")]))
+  for dt in ["float32", "int32", "int64"]:
+    out.append(op_case(f"ZEROS_LIKE_{dt}", "ZEROS_LIKE", [T([3, 5], dt)], [T([3, 5], dt)]))
+  return out
 
 
 def all_cases():

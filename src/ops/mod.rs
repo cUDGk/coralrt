@@ -7,6 +7,7 @@ pub mod fixedpoint;
 pub mod util;
 
 mod binary;
+mod eigen;
 mod dpp;
 mod quant;
 mod reduce;
