@@ -195,6 +195,27 @@ def movement_cases():
 
 def reduce_cases():
   out = []
+  red = lambda name, op, x, axis, keep, o_q=None, const=True: out.append(op_case(
+    name, op, [x, T([len(axis)], "int32", data=axis) if const else T([len(axis)], "int32", value=axis)], [T([], x.dtype, o_q if o_q is not None else x.quant)],
+    ("ReducerOptions", {"keepDims": keep})))
+  for op in ["MEAN", "SUM", "REDUCE_PROD", "REDUCE_MAX", "REDUCE_MIN"]:
+    for dt in ["float32", "int32", "int64", "uint8", "int8", "int16"]:
+      q = (Q[dt][0], 0) if dt == "int16" else Q.get(dt)
+      gen = ("int", 1, 3) if op == "REDUCE_PROD" and dt not in ("float32",) else ("uniform", 0.5, 1.5) if op == "REDUCE_PROD" else None
+      for k, (shape, axis, keep) in enumerate([([2, 3, 4], [1], False), ([2, 3, 4], [-1], True), ([2, 3, 4], [0, 2], False),
+                                                ([2, 4, 5, 3], [1, 2], True), ([2, 4, 5, 3], [2, 1], False), ([3, 4], [1, 1], False)]):
+        red(f"{op}_{dt}_{k}", op, T(shape, dt, q, gen=gen), axis, keep)
+      if dt in ("uint8", "int8") and op in ("MEAN", "SUM"):
+        for k, (shape, axis, keep) in enumerate([([2, 3, 4], [1], False), ([2, 4, 5, 3], [1, 2], True), ([2, 4, 5, 3], [1, 2], False)]):
+          red(f"{op}_{dt}_rescale_{k}", op, T(shape, dt, Q[dt]), axis, keep, QO[dt])
+      if dt == "int16" and op == "MEAN":
+        red("MEAN_int16_rescale_hw", "MEAN", T([2, 4, 5, 3], dt, (0.001, 0)), [1, 2], True, (0.0007, 0))
+  for shape in [[3, 7], [2, 19], [5, 33], [1, 8]]:
+    red(f"MEAN_f32_last_{shape[1]}", "MEAN", T(shape), [1], False)
+    red(f"MEAN_f32_last_{shape[1]}_neg", "MEAN", T(shape), [-1], False)
+  red("SUM_f32_dynamic_axis", "SUM", T([3, 4, 5]), [0, 2], False, const=False)
+  for k, (shape, axis, keep) in enumerate([([3, 4], [1], False), ([2, 3, 4], [0, 2], True)]):
+    red(f"REDUCE_ANY_{k}", "REDUCE_ANY", T(shape, "bool"), axis, keep)
   for op in ["ARG_MAX", "ARG_MIN"]:
     opt = "ArgMaxOptions" if op == "ARG_MAX" else "ArgMinOptions"
     for dt in ["float32", "uint8", "int8", "int32"]:
