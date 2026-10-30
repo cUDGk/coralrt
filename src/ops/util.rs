@@ -155,7 +155,10 @@ pub fn mul_by_quantized_multiplier(x: i32, m: i32, shift: i32) -> i32 {
 /// exception is uint8 on an x86 without AVX, which 2.5 sends to gemmlowp: the reference MultiplyByQuantizedMultiplier.
 pub fn gemm_requantize(x: i32, m: i32, shift: i32, uint8: bool) -> i32 {
     #[cfg(target_arch = "x86_64")]
-    if uint8 && !std::arch::is_x86_feature_detected!("avx") {
+    let no_avx = !std::arch::is_x86_feature_detected!("avx");
+    #[cfg(not(target_arch = "x86_64"))]
+    let no_avx = false;
+    if uint8 && no_avx {
         return mul_by_quantized_multiplier(x, m, shift);
     }
     let total = 31 - shift;
