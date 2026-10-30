@@ -371,7 +371,7 @@ impl FullyConnected {
 }
 
 /// SymmetricQuantizeFloats / AsymmetricQuantizeFloats (portable_tensor_utils.cc): (values, scale, zero point)
-fn quantize_row(v: &[f32], asymmetric: bool) -> (Vec<i32>, f32, i32) {
+pub(super) fn quantize_row(v: &[f32], asymmetric: bool) -> (Vec<i32>, f32, i32) {
     // std::minmax_element: the first smallest, the last largest
     let min = v.iter().copied().fold(v[0], |m, x| if x < m { x } else { m });
     let max = v.iter().copied().fold(v[0], |m, x| if x < m { m } else { x });

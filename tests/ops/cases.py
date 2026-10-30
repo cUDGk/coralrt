@@ -384,7 +384,7 @@ def nn_cases():
           c(f"{op}_{dt}_{k}_{int(align)}{int(half)}", op, [T(shape, dt, q), T([2], "int32", data=size)], [T([], dt, q)],
             (opt, {"alignCorners": align, "halfPixelCenters": half}))
     c(f"{op}_size_input", op, [T([1, 3, 3, 2]), T([2], "int32", value=[5, 2])], [T([])], (opt, {"alignCorners": False, "halfPixelCenters": True}))
-  out += fc_cases()
+  out += fc_cases() + conv_cases()
   return out
 
 
@@ -451,6 +451,42 @@ def fc_cases():
           bmo(ax, ay, asym))
   for name, (sa, sb, so) in [("big", (0.05, 0.03, 0.1)), ("ties", (0.5, 0.5, 1.0))]:
     c(f"BATCH_MATMUL_int8_{name}", "BATCH_MATMUL", [T([4, 16, 32], "int8", (sa, 0)), T([4, 32, 16], "int8", (sb, 0))], [T([], "int8", (so, 0))], bmo(False, False))
+  return out
+
+
+def conv_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  PAD = {"SAME": 0, "VALID": 1}
+  cvo = lambda pad, s, d, act="NONE": ("Conv2DOptions", {"padding": PAD[pad], "strideW": s[1], "strideH": s[0], "fusedActivationFunction": ACT[act],
+                                                         "dilationWFactor": d[1], "dilationHFactor": d[0]})
+  # (input shape, filter (out channels, height, width), stride, dilation, padding)
+  geoms = [([1, 5, 5, 3], (4, 3, 3), (1, 1), (1, 1), "SAME"), ([2, 7, 6, 2], (3, 3, 2), (2, 2), (1, 1), "VALID"), ([1, 6, 6, 4], (5, 1, 1), (1, 1), (1, 1), "SAME"),
+           ([1, 8, 7, 3], (2, 3, 3), (1, 1), (2, 2), "SAME"), ([1, 6, 5, 2], (3, 2, 3), (2, 1), (1, 2), "VALID")]
+  for k, (shape, (oc, fh, fw), s, d, pad) in enumerate(geoms):
+    fs = [oc, fh, fw, shape[3]]
+    scales = [0.02 + 0.005 * j for j in range(oc)]
+    pc = lambda base: ([base * x for x in scales], [0] * oc, 0)
+    acts = ["NONE", "RELU", "RELU6"] if k == 0 else ["NONE"]
+    for act in acts:
+      c(f"CONV_2D_f32_{k}_{act}", "CONV_2D", [T(shape), T(fs, data=const(fs, "float32", 30 + k)), T([oc], data=const([oc], "float32", 40 + k))], [T([])],
+        cvo(pad, s, d, act), tol=1e-5)
+      c(f"CONV_2D_uint8_{k}_{act}", "CONV_2D", [T(shape, "uint8", (0.05, 128)), T(fs, "uint8", (0.02, 120), data=const(fs, "uint8", 50 + k)),
+                                                T([oc], "int32", (0.001, 0), data=const([oc], "int32", 60 + k, -3000, 3000))], [T([], "uint8", (0.1, 120))], cvo(pad, s, d, act))
+      c(f"CONV_2D_int8_{k}_{act}", "CONV_2D", [T(shape, "int8", (0.05, 3)), T(fs, "int8", (scales, [0] * oc, 0), data=const(fs, "int8", 70 + k, -127, 127)),
+                                               T([oc], "int32", pc(0.05), data=const([oc], "int32", 80 + k, -3000, 3000))], [T([], "int8", (0.1, -2))], cvo(pad, s, d, act))
+    c(f"CONV_2D_int16_{k}", "CONV_2D", [T(shape, "int16", (0.001, 0)), T(fs, "int8", (scales, [0] * oc, 0), data=const(fs, "int8", 90 + k, -127, 127)),
+                                        T([oc], "int64", pc(0.001), data=const([oc], "int64", 100 + k, -100000, 100000))], [T([], "int16", (0.01, 0))], cvo(pad, s, d))
+    for wt in ["int8", "uint8"]:
+      c(f"CONV_2D_hybrid_{wt}_{k}", "CONV_2D", [T(shape), T(fs, wt, (0.02, 0), data=const(fs, wt, 110 + k)), T([oc], data=const([oc], "float32", 120 + k))], [T([])],
+        cvo(pad, s, d, "RELU" if k == 1 else "NONE"))
+    c(f"CONV_2D_hybrid_pc_{k}", "CONV_2D", [T(shape), T(fs, "int8", (scales, [0] * oc, 0), data=const(fs, "int8", 130 + k, -127, 127)),
+                                            T([oc], data=const([oc], "float32", 140 + k))], [T([])], cvo(pad, s, d, "RELU6" if k == 2 else "NONE"))
+  # halves everywhere: the GEMM's rounding shows
+  fs = [8, 3, 3, 8]
+  for dt, zp in [("uint8", 128), ("int8", 0)]:
+    c(f"CONV_2D_{dt}_ties", "CONV_2D", [T([1, 8, 8, 8], dt, (0.5, zp)), T(fs, dt, (0.5, zp), data=const(fs, dt, 150, -127 if dt == "int8" else 0, 127 if dt == "int8" else 255)),
+                                         T([8], "int32", (0.25, 0), data=const([8], "int32", 151, -100, 100))], [T([], dt, (1.0, zp))], cvo("SAME", (1, 1), (1, 1)))
   return out
 
 
