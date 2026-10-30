@@ -134,11 +134,19 @@ pub struct Node {
     pub outputs: Vec<i32>,
 }
 
+/// a SignatureDef: tensor name -> tensor index, inputs and outputs sorted by name
+pub struct Signature {
+    pub key: String,
+    pub inputs: Vec<(String, usize)>,
+    pub outputs: Vec<(String, usize)>,
+}
+
 pub struct Model {
     pub tensors: Vec<TensorInfo>,
     pub nodes: Vec<Node>,
     pub inputs: Vec<usize>,
     pub outputs: Vec<usize>,
+    pub signatures: Vec<Signature>,
 }
 
 /// BuiltinOperator names, by code
@@ -247,5 +255,17 @@ pub fn parse(buf: &[u8]) -> Result<Model> {
         index(n.outputs.clone())?;
         index(n.inputs.iter().copied().filter(|&i| i >= 0).collect())?;
     }
-    Ok(Model { tensors, nodes, inputs, outputs })
+    // SignatureDefs as TFLite 2.5 reads them: names in a std::map (sorted, a repeated name keeps its last index).
+    // Field 2 is method_name in 2.5 and signature_key from 2.6; signatures of other subgraphs (field 4, from 2.7) are
+    // left out, as only subgraph 0 runs here.
+    let mut signatures = Vec::new();
+    for s in m.tables(7).into_iter().filter(|s| s.get::<u32>(4, 0) == 0) {
+        let names = |i: usize| -> Result<Vec<(String, usize)>> {
+            let map: std::collections::BTreeMap<String, u32> = s.tables(i).iter().map(|t| (t.str(0).unwrap_or("").into(), t.get(1, 0))).collect();
+            map.into_iter().map(|(n, t)| Ok((n, index(vec![t as i32])?[0]))).collect()
+        };
+        let key = s.str(2).ok_or_else(|| Error("a SignatureDef has no key".into()))?;
+        signatures.push(Signature { key: key.into(), inputs: names(0)?, outputs: names(1)? });
+    }
+    Ok(Model { tensors, nodes, inputs, outputs, signatures })
 }

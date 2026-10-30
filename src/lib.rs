@@ -16,7 +16,7 @@ pub mod tflite;
 mod usb;
 
 pub use chip::Performance;
-pub use tflite::{TType, TensorInfo};
+pub use tflite::{Signature, TType, TensorInfo};
 
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -216,6 +216,11 @@ impl Interpreter {
 
     pub fn outputs(&self) -> &[usize] {
         &self.model.outputs
+    }
+
+    /// the model's SignatureDefs (most Edge TPU models have none)
+    pub fn signatures(&self) -> &[Signature] {
+        &self.model.signatures
     }
 
     pub fn tensor_count(&self) -> usize {

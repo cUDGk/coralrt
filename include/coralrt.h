@@ -87,6 +87,14 @@ int32_t coral_set_input(CoralInterpreter* it, int32_t i, const void* data, size_
 /* copy output i into data (len >= its size); returns the bytes copied */
 ptrdiff_t coral_get_output(const CoralInterpreter* it, int32_t i, void* data, size_t len);
 
+/* the model's SignatureDefs (most Edge TPU models have none). Each maps tensor names to tensor indices, for its
+ * inputs (io 0) and outputs (io 1), sorted by name as TensorFlow Lite 2.5 lists them; strings live as long as it */
+int32_t coral_signature_count(const CoralInterpreter* it);
+const char* coral_signature_key(const CoralInterpreter* it, int32_t s);
+int32_t coral_signature_tensor_count(const CoralInterpreter* it, int32_t s, int32_t io);
+const char* coral_signature_tensor_name(const CoralInterpreter* it, int32_t s, int32_t io, int32_t k);
+int32_t coral_signature_tensor_index(const CoralInterpreter* it, int32_t s, int32_t io, int32_t k);
+
 /* usb path of the stick the interpreter runs on ("" if the model has no Edge TPU op); returns its length */
 int32_t coral_interpreter_device_path(const CoralInterpreter* it, char* buf, size_t len);
 

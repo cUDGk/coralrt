@@ -49,6 +49,12 @@ fn copy_str(s: &str, buf: *mut c_char, len: usize) -> i32 {
 pub struct CoralInterpreter {
     it: Interpreter,
     names: Vec<CString>,
+    /// per signature: its key, then its input names, then its output names
+    sig_names: Vec<Vec<CString>>,
+}
+
+fn c_string(s: &str) -> CString {
+    CString::new(s.replace('\0', " ")).unwrap()
 }
 
 #[unsafe(no_mangle)]
@@ -89,8 +95,13 @@ fn new_interpreter(model: &[u8], device: *const c_char, performance: *const c_ch
     let (device, perf) = unsafe { (opt_str(device)?, opt_str(performance)?) };
     let performance = perf.map(Performance::parse).transpose()?;
     let it = Interpreter::from_bytes(model, &Options { device, performance })?;
-    let names = (0..it.tensor_count()).map(|t| CString::new(it.tensor(t).name.replace('\0', " ")).unwrap()).collect();
-    Ok(Box::into_raw(Box::new(CoralInterpreter { it, names })))
+    let names = (0..it.tensor_count()).map(|t| c_string(&it.tensor(t).name)).collect();
+    let sig_names = it
+        .signatures()
+        .iter()
+        .map(|s| std::iter::once(&s.key).chain(s.inputs.iter().chain(&s.outputs).map(|(n, _)| n)).map(|n| c_string(n)).collect())
+        .collect();
+    Ok(Box::into_raw(Box::new(CoralInterpreter { it, names, sig_names })))
 }
 
 #[unsafe(no_mangle)]
@@ -258,6 +269,56 @@ pub extern "C" fn coral_get_output(it: *const CoralInterpreter, i: i32, data: *m
         // SAFETY: the caller gives len >= out.len() writable bytes
         unsafe { std::ptr::copy_nonoverlapping(out.as_ptr(), data, out.len()) };
         Ok(out.len() as isize)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn coral_signature_count(it: *const CoralInterpreter) -> i32 {
+    call(-1, || Ok(unsafe { get(it) }?.it.signatures().len() as i32))
+}
+
+/// valid while the interpreter lives
+#[unsafe(no_mangle)]
+pub extern "C" fn coral_signature_key(it: *const CoralInterpreter, s: i32) -> *const c_char {
+    call(std::ptr::null(), || {
+        let c = unsafe { get(it) }?;
+        Ok(c.sig_names.get(s as usize).ok_or_else(|| crate::Error(format!("no signature {s}")))?[0].as_ptr())
+    })
+}
+
+/// the inputs (io 0) or outputs (io 1) of signature s, and where their names start in sig_names[s]
+fn signature_io(c: &CoralInterpreter, s: i32, io: i32) -> crate::Result<(&[(String, usize)], usize)> {
+    let sig = c.it.signatures().get(s as usize).ok_or_else(|| crate::Error(format!("no signature {s}")))?;
+    match io {
+        0 => Ok((&sig.inputs, 1)),
+        1 => Ok((&sig.outputs, 1 + sig.inputs.len())),
+        _ => Err(crate::Error(format!("io must be 0 (inputs) or 1 (outputs), not {io}"))),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn coral_signature_tensor_count(it: *const CoralInterpreter, s: i32, io: i32) -> i32 {
+    call(-1, || Ok(signature_io(unsafe { get(it) }?, s, io)?.0.len() as i32))
+}
+
+/// valid while the interpreter lives
+#[unsafe(no_mangle)]
+pub extern "C" fn coral_signature_tensor_name(it: *const CoralInterpreter, s: i32, io: i32, k: i32) -> *const c_char {
+    call(std::ptr::null(), || {
+        let c = unsafe { get(it) }?;
+        let (list, at) = signature_io(c, s, io)?;
+        if k < 0 || k as usize >= list.len() {
+            return Err(crate::Error(format!("signature {s} has no tensor {k} there")));
+        }
+        Ok(c.sig_names[s as usize][at + k as usize].as_ptr())
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn coral_signature_tensor_index(it: *const CoralInterpreter, s: i32, io: i32, k: i32) -> i32 {
+    call(-1, || {
+        let (list, _) = signature_io(unsafe { get(it) }?, s, io)?;
+        list.get(k as usize).map(|&(_, t)| t as i32).ok_or_else(|| crate::Error(format!("signature {s} has no tensor {k} there")))
     })
 }
 

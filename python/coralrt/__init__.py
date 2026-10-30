@@ -61,6 +61,11 @@ for _name, _args, _ret in [
     ("coral_tensor_quantized_dimension", [_I, ctypes.c_int32], ctypes.c_int32),
     ("coral_tensor_data", [_I, ctypes.c_int32], ctypes.c_void_p),
     ("coral_interpreter_device_path", [_I, ctypes.c_char_p, ctypes.c_size_t], ctypes.c_int32),
+    ("coral_signature_count", [_I], ctypes.c_int32),
+    ("coral_signature_key", [_I, ctypes.c_int32], _S),
+    ("coral_signature_tensor_count", [_I, ctypes.c_int32, ctypes.c_int32], ctypes.c_int32),
+    ("coral_signature_tensor_name", [_I, ctypes.c_int32, ctypes.c_int32, ctypes.c_int32], _S),
+    ("coral_signature_tensor_index", [_I, ctypes.c_int32, ctypes.c_int32, ctypes.c_int32], ctypes.c_int32),
 ]:
   _f = getattr(_lib, _name)
   _f.argtypes, _f.restype = _args, _ret
@@ -151,7 +156,18 @@ class Interpreter:
     return [self._details(t) for t in range(_check(_lib.coral_tensor_count(self._h)))]
 
   def get_signature_list(self):
-    return {}
+    return {key: {io: list(names) for io, names in sig.items()} for key, sig in self._get_full_signature_list().items()}
+
+  def _get_full_signature_list(self):
+    """{key: {"inputs": {name: tensor index}, "outputs": {...}}}, as tflite_runtime 2.5 returns it (pycoral reads it)"""
+    h, out = self._h, {}
+    for s in range(_check(_lib.coral_signature_count(h))):
+      out[_lib.coral_signature_key(h, s).decode("utf-8", "replace")] = {
+          io: {_lib.coral_signature_tensor_name(h, s, k, i).decode("utf-8", "replace"): _check(_lib.coral_signature_tensor_index(h, s, k, i))
+               for i in range(_check(_lib.coral_signature_tensor_count(h, s, k)))}
+          for k, io in enumerate(("inputs", "outputs"))
+      }
+    return out
 
   def tensor(self, tensor_index):
     """A function returning a writable numpy view of the tensor's memory."""
