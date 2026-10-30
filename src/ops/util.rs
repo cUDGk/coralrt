@@ -24,6 +24,68 @@ pub fn opt_vec(s: &OpSpec, i: usize) -> Vec<i32> {
     s.opts.map_or(Vec::new(), |t| t.scalars(i))
 }
 
+/// FormatConverter::SparseToDense (tools/optimize/sparsity/format_converter.cc): a sparse tensor's stored values
+/// laid out densely in row-major order, zeros elsewhere
+pub fn densify(t: &Tensor) -> Result<Vec<u8>> {
+    use crate::tensor::SparseDim;
+    let sp = t.sparsity.as_ref().ok_or_else(|| Error("the tensor is not sparse".into()))?;
+    let (rank, es) = (t.shape.len(), t.dtype.size());
+    let order: Vec<usize> = sp.traversal_order.iter().map(|&d| d as usize).collect();
+    if order.len() != sp.dims.len() || order.len() < rank {
+        return err("the sparsity's traversal order and dimensions do not match");
+    }
+    let block_size: Vec<usize> = (0..sp.block_map.len())
+        .map(|b| match sp.dims.get(order[rank + b]) {
+            Some(SparseDim::Dense(n)) => Ok(*n),
+            _ => err("a block dimension must be dense"),
+        })
+        .collect::<Result<_>>()?;
+    let mut out = vec![0u8; t.elements() * es];
+    let (src, mut ptr, mut idx) = (t.data(), 0usize, vec![0usize; order.len()]);
+    // Populate: walk the levels in traversal order; each leaf is the next stored value
+    #[allow(clippy::too_many_arguments)]
+    fn walk(level: usize, prev: usize, idx: &mut Vec<usize>, ptr: &mut usize, t: &Tensor, order: &[usize], block_size: &[usize], src: &[u8], out: &mut [u8]) -> Result<()> {
+        let sp = t.sparsity.as_ref().unwrap();
+        let (rank, es) = (t.shape.len(), t.dtype.size());
+        if level == idx.len() {
+            let mut orig = vec![0usize; rank];
+            for i in 0..rank {
+                orig[order[i]] = idx[i];
+            }
+            for i in rank..idx.len() {
+                let b = order[i] - rank;
+                let d = sp.block_map[b] as usize;
+                orig[d] = orig[d] * block_size[b] + idx[i];
+            }
+            let flat = orig.iter().zip(&t.shape).fold(0usize, |f, (&i, &n)| f * n + i);
+            if flat * es + es > out.len() || *ptr * es + es > src.len() {
+                return err("the sparse values do not fit the shape");
+            }
+            out[flat * es..flat * es + es].copy_from_slice(&src[*ptr * es..*ptr * es + es]);
+            *ptr += 1;
+            return Ok(());
+        }
+        match &sp.dims[level] {
+            SparseDim::Dense(n) => {
+                for i in 0..*n {
+                    idx[level] = i;
+                    walk(level + 1, prev * n + i, idx, ptr, t, order, block_size, src, out)?;
+                }
+            }
+            SparseDim::Sparse(segments, indices) => {
+                let (from, to) = (segments.get(prev).copied().unwrap_or(0), segments.get(prev + 1).copied().unwrap_or(0));
+                for i in from.max(0) as usize..to.max(0) as usize {
+                    idx[level] = *indices.get(i).ok_or_else(|| Error("a sparse index is missing".into()))? as usize;
+                    walk(level + 1, i, idx, ptr, t, order, block_size, src, out)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    walk(0, 0, &mut idx, &mut ptr, t, &order, &block_size, src, &mut out)?;
+    Ok(out)
+}
+
 /// Padding (schema): SAME or VALID
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Padding {

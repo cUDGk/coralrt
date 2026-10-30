@@ -1,5 +1,5 @@
 //! Data ops with several inputs or outputs, or values to compute: SHAPE, RANK, SPLIT, SPLIT_V, SCATTER_ND, RANGE,
-//! ONE_HOT, MATRIX_SET_DIAG, SPARSE_TO_DENSE, WHERE, UNIQUE, SELECT, SELECT_V2, ADD_N.
+//! ONE_HOT, MATRIX_SET_DIAG, SPARSE_TO_DENSE, WHERE, UNIQUE, SELECT, SELECT_V2, ADD_N, DENSIFY.
 
 use super::movement::{each_index, strides, take};
 use super::util::*;
@@ -25,6 +25,7 @@ pub fn create(s: &OpSpec) -> Result<Option<Box<dyn Kernel>>> {
         64 => Box::new(Select { v2: false }),
         123 => Box::new(Select { v2: true }),
         106 => Box::new(AddN),
+        124 => Box::new(Densify),
         _ => return Ok(None),
     }))
 }
@@ -596,6 +597,30 @@ impl Kernel for AddN {
             }
             t => return err(format!("{t:?} is not supported")),
         }
+        Ok(())
+    }
+}
+
+/// DENSIFY (densify.cc): a sparse constant (float32, float16 or int8) in its dense layout
+struct Densify;
+
+impl Kernel for Densify {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let i = io.input(0)?;
+        if i.dtype == TType::Str || i.alloc != Alloc::Constant || i.sparsity.is_none() {
+            return err("DENSIFY takes a sparse constant");
+        }
+        io.outs[0].dtype = i.dtype;
+        io.outs[0].resize(i.shape.clone());
+        Ok(())
+    }
+    fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let i = io.input(0)?;
+        if !matches!(i.dtype, TType::F32 | TType::F16 | TType::I8) {
+            return err(format!("{:?} is not supported", i.dtype));
+        }
+        let dense = densify(i)?;
+        io.outs[0].data_mut().copy_from_slice(&dense);
         Ok(())
     }
 }

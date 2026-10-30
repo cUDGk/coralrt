@@ -653,6 +653,32 @@ def nms_cases():
   return out
 
 
+def sparse_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  # (dense shape, sparsity, number of stored values)
+  csr = ([3, 4], {"traversal_order": [0, 1], "dim_metadata": [(0, 3, None, None), (1, 0, [0, 2, 3, 5], [0, 2, 1, 0, 3])]}, 5)
+  block4 = ([2, 8], {"traversal_order": [0, 1, 2], "block_map": [1], "dim_metadata": [(0, 2, None, None), (1, 0, [0, 1, 2], [1, 0]), (0, 4, None, None)]}, 8)
+  three = ([2, 2, 3], {"traversal_order": [0, 1, 2], "dim_metadata": [(0, 2, None, None), (0, 2, None, None), (1, 0, [0, 1, 1, 3, 4], [2, 0, 1, 2])]}, 4)
+  swapped = ([3, 4], {"traversal_order": [1, 0], "dim_metadata": [(0, 4, None, None), (1, 0, [0, 1, 3, 3, 5], [2, 0, 1, 0, 2])]}, 5)
+  for name, (shape, sp, n) in {"csr": csr, "block4": block4, "3d": three, "column_major": swapped}.items():
+    for dt in ["float32", "int8", "float16"]:
+      vals = const([n], dt if dt != "float16" else "float32", 450 + n).astype(dt)
+      c(f"DENSIFY_{name}_{dt}", "DENSIFY", [T(shape, dt, (0.1, 0) if dt == "int8" else None, data=vals, sparsity=sp)], [T([], dt, (0.1, 0) if dt == "int8" else None)])
+  fco = lambda asym=False: ("FullyConnectedOptions", {"fusedActivationFunction": 0, "weightsFormat": 0, "keepNumDims": False, "asymmetricQuantizeInputs": asym})
+  w_csr = {"traversal_order": [0, 1], "dim_metadata": [(0, 4, None, None), (1, 0, [0, 2, 3, 6, 8], [0, 5, 2, 1, 3, 4, 0, 5])]}
+  c("FULLY_CONNECTED_sparse_f32", "FULLY_CONNECTED", [T([2, 6]), T([4, 6], data=const([8], "float32", 460), sparsity=w_csr), T([4], data=const([4], "float32", 461))],
+    [T([])], fco(), tol=1e-5)
+  w_block4 = {"traversal_order": [0, 1, 2], "block_map": [1], "dim_metadata": [(0, 3, None, None), (1, 0, [0, 1, 1, 3], [1, 0, 1]), (0, 4, None, None)]}
+  c("FULLY_CONNECTED_sparse_f32_1x4", "FULLY_CONNECTED", [T([2, 8]), T([3, 8], data=const([12], "float32", 462), sparsity=w_block4), T([3], data=const([3], "float32", 463))],
+    [T([])], fco(), tol=1e-5)
+  w_block16 = {"traversal_order": [0, 1, 2], "block_map": [1], "dim_metadata": [(0, 3, None, None), (1, 0, [0, 1, 1, 3], [1, 0, 1]), (0, 16, None, None)]}
+  for asym in [False, True]:
+    c(f"FULLY_CONNECTED_sparse_hybrid_{int(asym)}", "FULLY_CONNECTED", [T([2, 32]), T([3, 32], "int8", (0.02, 0), data=const([48], "int8", 464), sparsity=w_block16),
+                                                                      T([3], data=const([3], "float32", 465))], [T([])], fco(asym))
+  return out
+
+
 def all_cases():
   return (binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases() + nn_cases()
-          + lookup_cases() + control_cases() + complex_cases() + nms_cases())
+          + lookup_cases() + control_cases() + complex_cases() + nms_cases() + sparse_cases())

@@ -1,7 +1,8 @@
 //! FULLY_CONNECTED (fully_connected.cc), the paths 2.5 takes by type: float through Eigen's GEMM (here summed in
 //! double: the order of Eigen's blocked product depends on the CPU's cache sizes, so float matches within
 //! rounding), quantized through ruy / gemmlowp (exact integers, then MultiplyByQuantizedMultiplier), hybrid (float
-//! input, 8-bit weights) through portable_tensor_utils, and the shuffled 4x16 uint8 weights.
+//! input, 8-bit weights) through portable_tensor_utils, the shuffled 4x16 uint8 weights, and sparse weights (float
+//! laid out densely, hybrid through 2.5's ledger of 1x16 blocks). Also BATCH_MATMUL (batch_matmul.cc).
 
 use super::eigen;
 use super::util::*;
@@ -25,6 +26,7 @@ pub fn create(s: &OpSpec) -> Result<Option<Box<dyn Kernel>>> {
             multiplier: (0, 0),
             act_q: (0, 0),
             row_sums: None,
+            dense_weights: None,
         }),
         126 => Box::new(BatchMatMul {
             adj_x: opt(s, 0, 0u8) != 0,
@@ -199,6 +201,8 @@ struct FullyConnected {
     act_q: (i32, i32),
     /// hybrid, asymmetric: the weights' row sums, worked out on the first run as 2.5 does
     row_sums: Option<Vec<i32>>,
+    /// sparse float weights laid out densely
+    dense_weights: Option<Vec<f32>>,
 }
 
 impl Kernel for FullyConnected {
@@ -224,8 +228,22 @@ impl Kernel for FullyConnected {
         if !types_ok {
             return err(format!("input {:?}, weights {:?}, output {:?} is not supported", i.dtype, f.dtype, o.dtype));
         }
-        if f.sparsity.is_some() {
-            return err("sparse weights are not supported yet");
+        self.dense_weights = None;
+        if let Some(sp) = &f.sparsity {
+            // float: SupportedSparsityFormat (dense rows, sparse columns; random or 1x4 blocks), worked out densely;
+            // hybrid: the ledger of 1x16 blocks; the integer kernels read sparse weights as dense, so they refuse
+            use crate::tensor::SparseDim;
+            let csr = matches!(sp.dims.first(), Some(SparseDim::Dense(_))) && matches!(sp.dims.get(1), Some(SparseDim::Sparse(..)));
+            let ok = match f.dtype {
+                TType::F32 => csr && (sp.dims.len() == 2 || (sp.dims.len() == 3 && matches!(sp.dims[2], SparseDim::Dense(4)))),
+                _ => hybrid && csr,
+            };
+            if !ok {
+                return err("Unsupported sparse fully-connected weight format.");
+            }
+            if f.dtype == TType::F32 {
+                self.dense_weights = Some(densify(f)?.chunks_exact(4).map(|b| f32::from_le_bytes(b.try_into().unwrap())).collect());
+            }
         }
         if !hybrid && !matches!(self.act, Act::None | Act::Relu | Act::ReluN1To1 | Act::Relu6) {
             return err(format!("activation {:?} is not supported", self.act));
@@ -275,7 +293,7 @@ impl Kernel for FullyConnected {
         let batches = io.outs[0].elements() / units.max(1);
         if f.dtype == TType::F32 {
             let (lo, hi) = act_range_f(self.act);
-            let (x, w) = (i.as_slice::<f32>(), f.as_slice::<f32>());
+            let (x, w) = (i.as_slice::<f32>(), self.dense_weights.as_deref().unwrap_or(f.as_slice::<f32>()));
             let b = bias.map(|t| t.as_slice::<f32>());
             let out = io.outs[0].as_mut_slice::<f32>();
             for bb in 0..batches {
@@ -349,7 +367,26 @@ impl FullyConnected {
                 out[bb * units + u] = bias.map_or(0.0, |b| b.as_slice::<f32>()[u]);
             }
         }
-        if !x.iter().all(|&v| v == 0.0) {
+        if let (Some(crate::tensor::SparseDim::Sparse(segments, blocks)), false) = (f.sparsity.as_ref().and_then(|s| s.dims.get(1)), x.iter().all(|&v| v == 0.0)) {
+            // EvalSparseHybridImpl: SparseMatrixBatchVectorMultiplyAccumulate over the ledger, 16 stored weights per
+            // listed column block; the input's zero point is never taken out, even when quantized asymmetrically
+            for bb in 0..batches {
+                let (q, scale, _) = quantize_row(&x[bb * depth..(bb + 1) * depth], self.asymmetric);
+                let scale = scale * f.scale();
+                let mut at = 0usize;
+                for u in 0..units {
+                    let mut dot = 0i32;
+                    for k in segments[u] as usize..segments[u + 1] as usize {
+                        let start = blocks[k] as usize * 16;
+                        for c in 0..16 {
+                            dot = dot.wrapping_add(w[at] * q[start + c]);
+                            at += 1;
+                        }
+                    }
+                    out[bb * units + u] += dot as f32 * scale;
+                }
+            }
+        } else if f.sparsity.is_none() && !x.iter().all(|&v| v == 0.0) {
             if self.asymmetric && self.row_sums.is_none() {
                 self.row_sums = Some(w.chunks(depth).map(|r| r.iter().sum()).collect());
             }
