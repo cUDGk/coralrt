@@ -509,6 +509,27 @@ def conv_cases():
                                                             T([oc], data=const([oc], "float32", 250 + k))], [T([])], dwo(pad, s, d, dm, "RELU6" if k == 1 else "NONE"))
   c("DEPTHWISE_CONV_2D_int16_nobias", "DEPTHWISE_CONV_2D", [T([1, 4, 4, 2], "int16", (0.001, 0)), T([1, 3, 3, 2], "int8", ([0.02, 0.03], [0, 0], 3), data=const([1, 3, 3, 2], "int8", 260)), None],
     [T([], "int16", (0.01, 0))], dwo("SAME", (1, 1), (1, 1), 1))
+  tco = lambda pad, s: ("TransposeConvOptions", {"padding": PAD[pad], "strideW": s[1], "strideH": s[0]})
+  # (input shape, filter (out channels, height, width), stride, padding, output height and width)
+  tgeoms = [([1, 3, 3, 2], (3, 3, 3), (2, 2), "SAME", (6, 6)), ([2, 4, 3, 3], (2, 2, 2), (1, 1), "VALID", (5, 4)), ([1, 3, 4, 2], (4, 3, 2), (2, 1), "VALID", (7, 5)),
+            ([1, 4, 4, 1], (2, 1, 1), (2, 2), "SAME", (8, 8))]
+  for k, (shape, (oc, fh, fw), s, pad, (oh, ow)) in enumerate(tgeoms):
+    fs = [oc, fh, fw, shape[3]]
+    osz = T([4], "int32", data=[shape[0], oh, ow, oc])
+    scales = [0.02 + 0.005 * j for j in range(oc)]
+    pc = lambda base: ([base * x for x in scales], [0] * oc, 0)
+    c(f"TRANSPOSE_CONV_f32_{k}", "TRANSPOSE_CONV", [osz, T(fs, data=const(fs, "float32", 270 + k)), T(shape), T([oc], data=const([oc], "float32", 280 + k))], [T([])],
+      tco(pad, s), tol=1e-5)
+    c(f"TRANSPOSE_CONV_uint8_{k}", "TRANSPOSE_CONV", [osz, T(fs, "uint8", (0.02, 120), data=const(fs, "uint8", 290 + k)), T(shape, "uint8", (0.05, 128)),
+                                                      T([oc], "int32", (0.001, 0), data=const([oc], "int32", 300 + k, -3000, 3000))], [T([], "uint8", (0.1, 120))], tco(pad, s))
+    c(f"TRANSPOSE_CONV_int8_{k}", "TRANSPOSE_CONV", [osz, T(fs, "int8", (scales, [0] * oc, 0), data=const(fs, "int8", 310 + k, -127, 127)), T(shape, "int8", (0.05, 3)),
+                                                     T([oc], "int32", pc(0.05), data=const([oc], "int32", 320 + k, -3000, 3000))], [T([], "int8", (0.1, -2))], tco(pad, s))
+    c(f"TRANSPOSE_CONV_int16_{k}", "TRANSPOSE_CONV", [osz, T(fs, "int8", (scales, [0] * oc, 0), data=const(fs, "int8", 330 + k, -127, 127)), T(shape, "int16", (0.001, 0)),
+                                                      T([oc], "int64", pc(0.001), data=const([oc], "int64", 340 + k, -100000, 100000))], [T([], "int16", (0.01, 0))], tco(pad, s))
+  c("TRANSPOSE_CONV_f32_nobias", "TRANSPOSE_CONV", [T([4], "int32", data=[1, 6, 6, 2]), T([2, 3, 3, 2], data=const([2, 3, 3, 2], "float32", 350)), T([1, 3, 3, 2])],
+    [T([])], tco("SAME", (2, 2)), tol=1e-5)
+  c("TRANSPOSE_CONV_shape_input", "TRANSPOSE_CONV", [T([4], "int32", value=[1, 6, 6, 2]), T([2, 3, 3, 2], data=const([2, 3, 3, 2], "float32", 351)), T([1, 3, 3, 2])],
+    [T([])], tco("SAME", (2, 2)), tol=1e-5)
   # halves everywhere: the GEMM's rounding shows
   fs = [8, 3, 3, 8]
   for dt, zp in [("uint8", 128), ("int8", 0)]:

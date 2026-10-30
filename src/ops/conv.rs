@@ -29,6 +29,7 @@ pub fn create(s: &OpSpec) -> Result<Option<Box<dyn Kernel>>> {
             geom: Geom::default(),
             quant: Quant::default(),
         }),
+        67 => Box::new(TransposeConv { padding: opt_padding(s, 0)?, stride: (opt(s, 2, 0), opt(s, 1, 0)), quant: Quant::default() }),
         _ => return Ok(None),
     }))
 }
@@ -414,6 +415,140 @@ impl Kernel for DepthwiseConv2D {
             }
         }
         Ok(())
+    }
+}
+
+/// transpose_conv.cc (inputs: output shape, weights OHWI, input, optional bias): every input pixel spread over the
+/// output through the filter (TransposeConvV2: GEMM, then col2im), the bias added after. Integer sums are exact, then
+/// the reference MultiplyByQuantizedMultiplier; float matches within rounding (Eigen's GEMM).
+struct TransposeConv {
+    padding: Padding,
+    stride: (i32, i32),
+    quant: Quant,
+}
+
+impl TransposeConv {
+    fn resize(io: &mut Io) -> Result<()> {
+        let s = ints(io.input(0)?)?;
+        if s.len() != 4 || s.iter().any(|&d| d < 0) {
+            return err(format!("the output shape {s:?} must be 4 sizes"));
+        }
+        io.outs[0].resize(s.iter().map(|&d| d as usize).collect());
+        Ok(())
+    }
+}
+
+impl Kernel for TransposeConv {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let (shape, w, i, bias) = (io.input(0)?, io.input(1)?, io.input(2)?, io.opt(3));
+        let o = &io.outs[0];
+        if shape.shape.len() != 1 || shape.dtype != TType::I32 || i.shape.len() != 4 || w.shape.len() != 4 || i.shape[3] != w.shape[3] {
+            return err("TRANSPOSE_CONV takes an int32 output shape, 4-D weights and a 4-D input of the weights' depth");
+        }
+        if !matches!(i.dtype, TType::F32 | TType::U8 | TType::I8 | TType::I16) || o.dtype != i.dtype {
+            return err(format!("input {:?}, output {:?} is not supported", i.dtype, o.dtype));
+        }
+        if i.dtype == TType::I16 {
+            if w.dtype != TType::I8 || i.zero_point() != 0 || o.zero_point() != 0 {
+                return err("int16 needs int8 weights and zero points 0");
+            }
+        } else if w.dtype != i.dtype {
+            return err("the weights must have the input's type");
+        }
+        if let Some(b) = bias {
+            let ok = match i.dtype {
+                TType::U8 => b.dtype == TType::I32,
+                TType::I8 => b.dtype == TType::I32 && b.zero_point() == 0,
+                TType::I16 => b.dtype == TType::I64 && b.zero_point() == 0,
+                t => b.dtype == t,
+            };
+            if !ok || b.elements() != w.shape[0] {
+                return err("the bias must have the input's accumulator type and one value per output channel");
+            }
+        }
+        if i.dtype != TType::F32 {
+            self.quant = conv_quant(i, w, bias, o, Act::None, w.shape[0])?;
+        }
+        if shape.alloc == crate::tensor::Alloc::Constant {
+            Self::resize(io)
+        } else {
+            io.outs[0].alloc = crate::tensor::Alloc::Dynamic;
+            Ok(())
+        }
+    }
+
+    fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        if self.stride.0 <= 0 || self.stride.1 <= 0 {
+            return err("the strides must be positive");
+        }
+        if io.outs[0].alloc == crate::tensor::Alloc::Dynamic {
+            Self::resize(io)?;
+        }
+        let (w, i, bias) = (io.input(1)?, io.input(2)?, io.opt(3));
+        let o = &mut io.outs[0];
+        let (b, ih, iw, ic) = (i.shape[0], i.shape[1], i.shape[2], i.shape[3]);
+        let (oh, ow, oc) = (o.shape[1], o.shape[2], o.shape[3]);
+        let (fh, fw) = (w.shape[1], w.shape[2]);
+        if o.shape[0] != b || oc != w.shape[0] {
+            return err("the output shape does not fit the input and weights");
+        }
+        // the padding of the convolution this one transposes, from the output's size
+        let (_, pt, _) = out_size_and_pad(self.padding, oh as i32, fh as i32, self.stride.0, 1);
+        let (_, pl, _) = out_size_and_pad(self.padding, ow as i32, fw as i32, self.stride.1, 1);
+        // acc[out] += mac(input index, weight index) for every input pixel, tap and channel
+        let spread = |mut mac: Box<dyn FnMut(usize, usize, usize) + '_>| {
+            for bb in 0..b {
+                for y in 0..ih {
+                    for x in 0..iw {
+                        for fy in 0..fh {
+                            let oy = (y as i32) * self.stride.0 - pt + fy as i32;
+                            for fx in 0..fw {
+                                let ox = (x as i32) * self.stride.1 - pl + fx as i32;
+                                if oy < 0 || oy >= oh as i32 || ox < 0 || ox >= ow as i32 {
+                                    continue;
+                                }
+                                let out = ((bb * oh + oy as usize) * ow + ox as usize) * oc;
+                                for c in 0..oc {
+                                    for k in 0..ic {
+                                        mac(out + c, ((bb * ih + y) * iw + x) * ic + k, ((c * fh + fy) * fw + fx) * ic + k);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        let n = o.elements();
+        if i.dtype == TType::F32 {
+            let (x, wv) = (i.as_slice::<f32>(), w.as_slice::<f32>());
+            let mut acc = vec![0.0f64; n];
+            spread(Box::new(|d, xi, wi| acc[d] += x[xi] as f64 * wv[wi] as f64));
+            let bv = bias.map(|t| t.as_slice::<f32>());
+            let v = o.as_mut_slice::<f32>();
+            for (k, a) in acc.into_iter().enumerate() {
+                v[k] = a as f32 + bv.map_or(0.0, |bv| bv[k % oc]);
+            }
+            return Ok(());
+        }
+        let (x, wv) = (ints(i)?, ints(w)?);
+        let (xz, wz) = (i.zero_point() as i64, if i.dtype == TType::U8 { w.zero_point() as i64 } else { 0 });
+        let mut acc = vec![0i64; n];
+        spread(Box::new(|d, xi, wi| acc[d] += (wv[wi] - wz) * (x[xi] - xz)));
+        let bv = bias.map(ints).transpose()?;
+        let (lo, hi) = type_range(o.dtype);
+        let oz = if o.dtype == TType::I16 { 0 } else { o.zero_point() };
+        let res: Vec<i64> = acc
+            .into_iter()
+            .enumerate()
+            .map(|(k, a)| {
+                let (m, s) = self.quant.multipliers[k % oc];
+                let a = a + bv.as_ref().map_or(0, |bv| bv[k % oc]);
+                let v = if o.dtype == TType::I16 { mul_by_quantized_multiplier_i64(a, m, s) } else { mul_by_quantized_multiplier(a as i32, m, s) };
+                v.wrapping_add(oz).clamp(lo, hi) as i64
+            })
+            .collect();
+        put_ints(o, &res)
     }
 }
 
