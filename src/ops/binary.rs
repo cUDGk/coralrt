@@ -213,10 +213,7 @@ fn eval(k: &Binary, a: &Tensor, b: &Tensor, o: &mut Tensor) -> Result<()> {
                 return err("POW does not support negative value for int32.");
             }
             // std::pow on ints is the double pow; static_cast back as x86 does it
-            bmap(a, b, o, |x: i32, y: i32| {
-                let p = (x as f64).powf(y as f64);
-                if p.is_nan() || p.abs() >= 2147483648.0 { i32::MIN } else { p as i32 }
-            })?;
+            bmap(a, b, o, |x: i32, y: i32| cvtt((x as f64).powf(y as f64), false) as i32)?;
         }
         (Op::SquaredDifference, TType::I32) => bmap(a, b, o, |x: i32, y: i32| x.wrapping_sub(y).wrapping_mul(x.wrapping_sub(y)))?,
         (Op::SquaredDifference, TType::I8) => squared_difference_q(a, b, o)?,

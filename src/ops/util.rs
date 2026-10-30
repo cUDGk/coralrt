@@ -129,6 +129,17 @@ pub fn act_range_f(act: Act) -> (f32, f32) {
     }
 }
 
+/// float -> int as x86 converts (cvttss2si / cvttsd2si): truncated, the type's minimum when out of range or NaN.
+/// static_cast leaves that undefined; narrower integers go through the 32-bit conversion.
+pub fn cvtt(x: f64, bits64: bool) -> i64 {
+    let lim = if bits64 { 9223372036854775808.0 } else { 2147483648.0 };
+    if x.is_nan() || x >= lim || x < -lim {
+        if bits64 { i64::MIN } else { i32::MIN as i64 }
+    } else {
+        x as i64
+    }
+}
+
 /// std::min(std::max(x, lo), hi), NaN passes through like in C++
 pub fn clamp_f(x: f32, lo: f32, hi: f32) -> f32 {
     let v = if x < lo { lo } else { x };

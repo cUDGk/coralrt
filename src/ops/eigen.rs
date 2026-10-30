@@ -72,6 +72,22 @@ pub fn exp(x0: f32) -> f32 {
     pmax(ldexp(y, m), x0)
 }
 
+/// psqrt<Packet4f> with EIGEN_FAST_MATH (Eigen's default): rsqrtps, one Newton step, then x times that; 0 for zero
+/// and denormals. rsqrtps differs between CPU makers, so this runs the instruction itself, as TFLite does on the
+/// same machine.
+pub fn psqrt(x: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: SSE is part of the x86_64 baseline
+    let y = unsafe {
+        use std::arch::x86_64::*;
+        _mm_cvtss_f32(_mm_rsqrt_ps(_mm_set1_ps(x)))
+    };
+    #[cfg(not(target_arch = "x86_64"))]
+    let y = 1.0 / x.sqrt();
+    let y = y * pmadd(x * -0.5, y * y, 1.5);
+    if x < f32::MIN_POSITIVE && !(x < 0.0) { 0.0 } else { x * y }
+}
+
 /// print<Packet4f> on SSE2 (no SSE4.1): round half to even by adding and subtracting 2^23, then the sign
 fn print(a: f32) -> f32 {
     let limit = (1u32 << 23) as f32;
@@ -84,30 +100,62 @@ fn print(a: f32) -> f32 {
     }
 }
 
-/// Eigen::ceil / Eigen::floor of a whole array as the SSE2 build runs it: packets of 4 through print (ceil(-0.7) is
-/// +0, floor(-0) is +0), the elements after the last full packet through std::ceil / std::floor
-pub fn ceil_array(v: &[f32], out: &mut [f32]) {
-    let full = v.len() / 4 * 4;
-    for (k, (d, &a)) in out.iter_mut().zip(v).enumerate() {
-        *d = if k < full {
-            let tmp = print(a);
-            tmp + if tmp < a { 1.0 } else { 0.0 }
-        } else {
-            a.ceil()
-        };
-    }
+/// pceil / pfloor on SSE2, through print: ceil(-0.7) is +0, floor(-0) is +0
+pub fn pceil(a: f32) -> f32 {
+    let tmp = print(a);
+    tmp + if tmp < a { 1.0 } else { 0.0 }
 }
 
-pub fn floor_array(v: &[f32], out: &mut [f32]) {
+pub fn pfloor(a: f32) -> f32 {
+    let tmp = print(a);
+    tmp - if tmp > a { 1.0 } else { 0.0 }
+}
+
+/// A coefficient-wise op over a whole buffer as Eigen's vectorized assignment runs it (TFLite's buffers start
+/// 16-byte aligned): `packet` on the packets of 4, `scalar` (the std:: function) on the elements after the last one
+pub fn map_array(v: &mut [f32], packet: impl Fn(f32) -> f32, scalar: impl Fn(f32) -> f32) {
     let full = v.len() / 4 * 4;
-    for (k, (d, &a)) in out.iter_mut().zip(v).enumerate() {
-        *d = if k < full {
-            let tmp = print(a);
-            tmp - if tmp > a { 1.0 } else { 0.0 }
-        } else {
-            a.floor()
-        };
+    let (head, tail) = v.split_at_mut(full);
+    head.iter_mut().for_each(|x| *x = packet(*x));
+    tail.iter_mut().for_each(|x| *x = scalar(*x));
+}
+
+/// Eigen's redux sum (Redux.h, LinearVectorizedTraversal): packets of 4 from the first 16-byte aligned element, two
+/// accumulators, predux as (a0 + a2) + (a1 + a3), then the elements before and after. `offset`: the slice's start
+/// in floats from a 16-byte aligned base; 0 as well for an expression, which has no address to align to.
+pub fn sum(v: &[f32], offset: usize) -> f32 {
+    let size = v.len();
+    let aligned_start = ((4 - offset % 4) % 4).min(size);
+    let aligned_size = (size - aligned_start) / 4 * 4;
+    let aligned_size2 = (size - aligned_start) / 8 * 8;
+    let (end, end2) = (aligned_start + aligned_size, aligned_start + aligned_size2);
+    if aligned_size == 0 {
+        return v[1..].iter().fold(v[0], |s, &x| s + x);
     }
+    let load = |k: usize| [v[k], v[k + 1], v[k + 2], v[k + 3]];
+    let add = |a: [f32; 4], b: [f32; 4]| [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]];
+    let mut p0 = load(aligned_start);
+    if aligned_size > 4 {
+        let mut p1 = load(aligned_start + 4);
+        let mut k = aligned_start + 8;
+        while k < end2 {
+            p0 = add(p0, load(k));
+            p1 = add(p1, load(k + 4));
+            k += 8;
+        }
+        p0 = add(p0, p1);
+        if end > end2 {
+            p0 = add(p0, load(end2));
+        }
+    }
+    let mut res = (p0[0] + p0[2]) + (p0[1] + p0[3]);
+    for &x in &v[..aligned_start] {
+        res += x;
+    }
+    for &x in &v[end..] {
+        res += x;
+    }
+    res
 }
 
 /// pldexp_generic: a * 2^e in four factors so no step over- or underflows

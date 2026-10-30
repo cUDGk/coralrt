@@ -157,7 +157,7 @@ fn round_to_nearest(v: f32) -> f32 {
     let f = v.floor();
     let diff = v - f;
     // static_cast<int>(floor) as x86 converts: the minimum when out of range
-    let fi = if f.is_nan() || f.abs() >= 2147483648.0 { i32::MIN } else { f as i32 };
+    let fi = cvtt(f as f64, false);
     if diff < 0.5 || (diff == 0.5 && fi % 2 == 0) { f } else { f + 1.0 }
 }
 
@@ -255,8 +255,15 @@ fn eval(op: Op, i: &Tensor, o: &mut Tensor) -> Result<()> {
             })?;
         }
         (Op::Square, TType::F32) => map_f32(i, o, |x| x * x),
-        (Op::Ceil, TType::F32) => eigen::ceil_array(i.as_slice(), o.as_mut_slice()),
-        (Op::Floor, TType::F32) => eigen::floor_array(i.as_slice(), o.as_mut_slice()),
+        (Op::Ceil | Op::Floor, TType::F32) => {
+            let v = o.as_mut_slice::<f32>();
+            v.copy_from_slice(i.as_slice());
+            if op == Op::Ceil {
+                eigen::map_array(v, eigen::pceil, f32::ceil)
+            } else {
+                eigen::map_array(v, eigen::pfloor, f32::floor)
+            }
+        }
         (Op::Round, TType::F32) => map_f32(i, o, round_to_nearest),
         (Op::Not, TType::Bool) => o.data_mut().iter_mut().zip(i.data()).for_each(|(d, &x)| *d = (x == 0) as u8),
         (Op::ZerosLike, TType::F32 | TType::I32 | TType::I64) => o.data_mut().fill(0),

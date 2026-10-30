@@ -67,16 +67,6 @@ fn dequantize(i: &Tensor, o: &mut Tensor) -> Result<()> {
     Ok(())
 }
 
-/// float -> int as x86 converts (cvttss2si / cvttsd2si): truncated, the type's minimum when out of range or NaN.
-/// static_cast leaves that undefined; narrower integers go through the 32-bit conversion.
-fn cvtt(x: f64, bits64: bool) -> i64 {
-    let lim = if bits64 { 9223372036854775808.0 } else { 2147483648.0 };
-    if x.is_nan() || x >= lim || x < -lim {
-        if bits64 { i64::MIN } else { i32::MIN as i64 }
-    } else {
-        x as i64
-    }
-}
 
 /// cast.cc: static_cast of every element; a complex value casts its real part, a cast to complex has no imaginary one
 fn cast(i: &Tensor, o: &mut Tensor) -> Result<()> {

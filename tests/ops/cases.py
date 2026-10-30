@@ -281,5 +281,43 @@ def unary_cases():
   return out
 
 
+def norm_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  # row lengths with and without a tail after Eigen's packets of 4, and rows that start unaligned
+  shapes = [[2, 3, 7], [5, 16], [1, 1, 1, 33], [3], [2, 2, 2, 2, 5], [6, 2]]
+  for k, shape in enumerate(shapes):
+    for beta in [1.0, 0.3, 2.5]:
+      c(f"SOFTMAX_f32_{k}_{beta}", "SOFTMAX", [T(shape, gen=("uniform", -8, 8))], [T([])], ("SoftmaxOptions", {"beta": beta}))
+    c(f"LOG_SOFTMAX_f32_{k}", "LOG_SOFTMAX", [T(shape, gen=("uniform", -8, 8))], [T([])])
+    if len(shape) <= 4:
+      c(f"L2_NORMALIZATION_f32_{k}", "L2_NORMALIZATION", [T(shape)], [T([])], ("L2NormOptions", {"fusedActivationFunction": 0}))
+  for dt in ["uint8", "int8"]:
+    for k, shape in enumerate([[2, 3, 7], [4, 40]]):
+      for beta in [1.0, 0.7]:
+        c(f"SOFTMAX_{dt}_{k}_{beta}", "SOFTMAX", [T(shape, dt, Q[dt])], [T([], dt, (1 / 256, 0 if dt == "uint8" else -128))],
+          ("SoftmaxOptions", {"beta": beta}))
+      c(f"SOFTMAX_{dt}_to_int16_{k}", "SOFTMAX", [T(shape, dt, Q[dt])], [T([], "int16", (1 / 32768, 0))], ("SoftmaxOptions", {"beta": 1.0}))
+      # on int8, rows that span at most 127 (2.5 reads outside its table beyond that)
+      gen = ("int", -60, 60) if dt == "int8" else None
+      c(f"LOG_SOFTMAX_{dt}_{k}", "LOG_SOFTMAX", [T(shape, dt, Q[dt], gen=gen)], [T([], dt, (16 / 256, 255 if dt == "uint8" else 127))])
+      c(f"LOG_SOFTMAX_{dt}_{k}_coarse", "LOG_SOFTMAX", [T(shape, dt, (0.3, Q[dt][1]), gen=gen)], [T([], dt, (16 / 256, 255 if dt == "uint8" else 127))])
+      c(f"L2_NORMALIZATION_{dt}_{k}", "L2_NORMALIZATION", [T(shape, dt, Q[dt])], [T([], dt, (1 / 128, 128 if dt == "uint8" else 0))],
+        ("L2NormOptions", {"fusedActivationFunction": 0}))
+    # an output scale with room to round, and a zero point (which 2.5's uint8 output ignores)
+    c(f"SOFTMAX_{dt}_coarse", "SOFTMAX", [T([3, 10], dt, (0.2, 3))], [T([], dt, (0.01, 5))], ("SoftmaxOptions", {"beta": 1.0}))
+  for k, (shape, s, beta) in enumerate([([2, 3, 7], 0.001, 1.0), ([4, 40], 0.0003, 1.0), ([2, 2, 3, 9], 0.002, 0.5), ([5], 0.01, 2.0)]):
+    c(f"SOFTMAX_int16_{k}", "SOFTMAX", [T(shape, "int16", (s, 0))], [T([], "int16", (1 / 32768, 0))], ("SoftmaxOptions", {"beta": beta}))
+  c("L2_NORMALIZATION_f32_zero", "L2_NORMALIZATION", [T([2, 4], value=[[0, 0, 0, 0], [1e-8, 0, 0, 0]])], [T([])],
+    ("L2NormOptions", {"fusedActivationFunction": 0}))
+  c("L2_NORMALIZATION_uint8_zero", "L2_NORMALIZATION", [T([2, 4], "uint8", Q["uint8"], value=[[128] * 4, [129, 128, 128, 128]])],
+    [T([], "uint8", (1 / 128, 128))], ("L2NormOptions", {"fusedActivationFunction": 0}))
+  for k, (radius, bias, alpha, beta) in enumerate([(2, 1.0, 1e-4, 0.75), (1, 2.0, 0.5, 1.0), (3, 0.5, 0.2, 0.5), (0, 1.0, 1.0, 0.75), (5, 1.0, 0.01, 2.0)]):
+    for shape in [[1, 3, 3, 5], [2, 2, 2, 16]]:
+      c(f"LOCAL_RESPONSE_NORMALIZATION_{k}_{shape[3]}", "LOCAL_RESPONSE_NORMALIZATION", [T(shape)], [T([])],
+        ("LocalResponseNormalizationOptions", {"radius": radius, "bias": bias, "alpha": alpha, "beta": beta}))
+  return out
+
+
 def all_cases():
-  return binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases()
+  return binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases()

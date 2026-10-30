@@ -101,44 +101,6 @@ fn sums_i64(vals: &[i64], offs: &[usize], n_out: usize) -> Vec<i64> {
     s
 }
 
-/// Eigen's redux sum of a contiguous float slice the SSE2 build runs (Redux.h, LinearVectorizedTraversal):
-/// packets of 4 from the first 16-byte aligned element, two accumulators, predux as (a0 + a2) + (a1 + a3), then the
-/// elements before and after. `offset`: the slice's start in floats from a 16-byte aligned base.
-fn eigen_sum(v: &[f32], offset: usize) -> f32 {
-    let size = v.len();
-    let aligned_start = ((4 - offset % 4) % 4).min(size);
-    let aligned_size = (size - aligned_start) / 4 * 4;
-    let aligned_size2 = (size - aligned_start) / 8 * 8;
-    let (end, end2) = (aligned_start + aligned_size, aligned_start + aligned_size2);
-    if aligned_size == 0 {
-        return v[1..].iter().fold(v[0], |s, &x| s + x);
-    }
-    let load = |k: usize| [v[k], v[k + 1], v[k + 2], v[k + 3]];
-    let add = |a: [f32; 4], b: [f32; 4]| [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]];
-    let mut p0 = load(aligned_start);
-    if aligned_size > 4 {
-        let mut p1 = load(aligned_start + 4);
-        let mut k = aligned_start + 8;
-        while k < end2 {
-            p0 = add(p0, load(k));
-            p1 = add(p1, load(k + 4));
-            k += 8;
-        }
-        p0 = add(p0, p1);
-        if end > end2 {
-            p0 = add(p0, load(end2));
-        }
-    }
-    let mut res = (p0[0] + p0[2]) + (p0[1] + p0[3]);
-    for &x in &v[..aligned_start] {
-        res += x;
-    }
-    for &x in &v[end..] {
-        res += x;
-    }
-    res
-}
-
 impl Kernel for Reduce {
     fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
         if io.input(1)?.alloc != Alloc::Constant {
@@ -188,7 +150,7 @@ impl Kernel for Reduce {
                 let n = i.shape[i.shape.len() - 1];
                 let (x, v) = (i.as_slice::<f32>(), o.as_mut_slice::<f32>());
                 for (r, d) in v.iter_mut().enumerate() {
-                    *d = eigen_sum(&x[r * n..(r + 1) * n], r * n) / n as f32;
+                    *d = super::eigen::sum(&x[r * n..(r + 1) * n], r * n) / n as f32;
                 }
             }
             (RedOp::Mean, TType::F32) => {
