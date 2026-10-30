@@ -1,14 +1,25 @@
 """The op cases: for every op of TensorFlow Lite 2.5's BuiltinOpResolver, small models over its types, shapes and
 options. build.py writes them, official.py records tflite_runtime 2.5 on them, op_check compares coralrt.
 """
+import numpy as np
+
 from spec import T, op_case
 
-ACT = {"NONE": 0, "RELU": 1, "RELU_N1_TO_1": 2, "RELU6": 3, "TANH": 4, "SIGN_BIT": 5}
+ACT ={"NONE": 0, "RELU": 1, "RELU_N1_TO_1": 2, "RELU6": 3, "TANH": 4, "SIGN_BIT": 5}
 TT = {"float32": 0, "float16": 1, "int32": 2, "uint8": 3, "int64": 4, "string": 5, "bool": 6, "int16": 7, "complex64": 8,
       "int8": 9, "float64": 10, "complex128": 11, "uint64": 12, "uint32": 15}
 
 # quantization of 8-bit tensors in the cases: (scale, zero point) per type
 Q = {"uint8": (0.05, 128), "int8": (0.05, 0), "int16": (0.001, 0)}
+
+
+def const(shape, dtype, seed, lo=None, hi=None):
+  """fixed random values for a constant tensor (weights, biases)"""
+  rng = np.random.default_rng(seed)
+  if dtype.startswith("float"):
+    return rng.uniform(-1.0 if lo is None else lo, 1.0 if hi is None else hi, size=shape).astype(dtype)
+  info = np.iinfo(dtype)
+  return rng.integers(info.min if lo is None else lo, info.max if hi is None else hi, size=shape, endpoint=True).astype(dtype)
 Q2 = {"uint8": (0.03, 100), "int8": (0.03, -10), "int16": (0.0007, 0)}
 QO = {"uint8": (0.1, 120), "int8": (0.1, -5), "int16": (0.002, 0)}
 
@@ -373,6 +384,50 @@ def nn_cases():
           c(f"{op}_{dt}_{k}_{int(align)}{int(half)}", op, [T(shape, dt, q), T([2], "int32", data=size)], [T([], dt, q)],
             (opt, {"alignCorners": align, "halfPixelCenters": half}))
     c(f"{op}_size_input", op, [T([1, 3, 3, 2]), T([2], "int32", value=[5, 2])], [T([])], (opt, {"alignCorners": False, "halfPixelCenters": True}))
+  out += fc_cases()
+  return out
+
+
+def fc_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  fco = lambda act="NONE", keep=False, asym=False, fmt=0: ("FullyConnectedOptions", {"fusedActivationFunction": ACT[act], "weightsFormat": fmt,
+                                                                                    "keepNumDims": keep, "asymmetricQuantizeInputs": asym})
+  # float: Eigen's GEMM sums in an order of its own, so within rounding
+  for act in ["NONE", "RELU", "RELU6", "RELU_N1_TO_1"]:
+    c(f"FULLY_CONNECTED_f32_{act}", "FULLY_CONNECTED", [T([2, 12]), T([5, 12], data=const([5, 12], "float32", 1)), T([5], data=const([5], "float32", 2))],
+      [T([])], fco(act), tol=1e-5)
+  c("FULLY_CONNECTED_f32_nobias", "FULLY_CONNECTED", [T([3, 2, 6]), T([4, 12], data=const([4, 12], "float32", 3)), None], [T([])], fco(), tol=1e-5)
+  c("FULLY_CONNECTED_f32_keep", "FULLY_CONNECTED", [T([2, 3, 12]), T([5, 12], data=const([5, 12], "float32", 4)), T([5], data=const([5], "float32", 5))],
+    [T([])], fco(keep=True), tol=1e-5)
+  c("FULLY_CONNECTED_f32_weights_input", "FULLY_CONNECTED", [T([2, 40]), T([7, 40]), T([7])], [T([])], fco(), tol=1e-5)
+  # quantized: (input, weights, output) types and quantization
+  for name, (it, iq), (wt, wq), (ot, oq) in [("uint8", ("uint8", (0.05, 128)), ("uint8", (0.02, 120)), ("uint8", (0.1, 120))),
+                                             ("int8", ("int8", (0.05, 0)), ("int8", (0.02, 0)), ("int8", (0.1, -5))),
+                                             ("int8_zp", ("int8", (0.05, 7)), ("int8", (0.02, 0)), ("int8", (0.08, 3))),
+                                             ("uint8_to_int16", ("uint8", (0.05, 128)), ("uint8", (0.02, 128)), ("int16", (0.001, 0))),
+                                             ("int8_to_int16", ("int8", (0.05, 3)), ("int8", (0.02, -2)), ("int16", (0.001, 0)))]:
+    bias = T([6], "int32", (iq[0] * wq[0], 0), data=const([6], "int32", 7, -3000, 3000))
+    for act in (["NONE", "RELU", "RELU6"] if name in ("uint8", "int8") else ["NONE"]):
+      c(f"FULLY_CONNECTED_{name}_{act}", "FULLY_CONNECTED", [T([3, 20], it, iq), T([6, 20], wt, wq, data=const([6, 20], wt, 8)), bias],
+        [T([], ot, oq)], fco(act))
+    c(f"FULLY_CONNECTED_{name}_nobias", "FULLY_CONNECTED", [T([2, 20], it, iq), T([6, 20], wt, wq, data=const([6, 20], wt, 9)), None], [T([], ot, oq)], fco())
+  c("FULLY_CONNECTED_int16", "FULLY_CONNECTED", [T([3, 20], "int16", (0.001, 0)), T([6, 20], "int8", (0.02, 0), data=const([6, 20], "int8", 10)),
+                                                 T([6], "int64", (0.00002, 0), data=const([6], "int64", 11, -100000, 100000))], [T([], "int16", (0.002, 0))], fco("RELU"))
+  # hybrid: float input, 8-bit weights
+  for wt in ["int8", "uint8"]:
+    for asym in [False, True]:
+      for act in ["NONE", "RELU", "TANH", "SIGN_BIT"]:
+        c(f"FULLY_CONNECTED_hybrid_{wt}_{int(asym)}_{act}", "FULLY_CONNECTED",
+          [T([3, 20]), T([6, 20], wt, (0.02, 0), data=const([6, 20], wt, 12)), T([6], data=const([6], "float32", 13))], [T([])], fco(act, asym=asym))
+  c("FULLY_CONNECTED_hybrid_zero", "FULLY_CONNECTED", [T([2, 4], value=[[0, 0, 0, 0], [0, -0.0, 0, 0]]), T([3, 4], "int8", (0.1, 0), data=const([3, 4], "int8", 14)),
+                                                       T([3], data=[0.5, -2.0, 1.0])], [T([])], fco("RELU"))
+  # shuffled 4x16 uint8 weights, int16 output, the shuffled input as a second output
+  for b in [1, 4]:
+    c(f"FULLY_CONNECTED_shuffled_{b}", "FULLY_CONNECTED",
+      [T([b, 32], "uint8", (0.05, 128)), T([8, 32], "uint8", (0.02, 128), data=const([8, 32], "uint8", 15)),
+       T([8], "int32", (0.001, 0), data=const([8], "int32", 16, -2000, 2000))],
+      [T([], "int16", (0.003, 0)), T([b * 32], "uint8")], fco(fmt=1))
   return out
 
 

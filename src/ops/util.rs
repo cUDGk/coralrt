@@ -87,6 +87,14 @@ pub fn mul_by_quantized_multiplier(x: i32, m: i32, shift: i32) -> i32 {
     rounding_divide_by_pot(srdhm(x.wrapping_mul(1 << l), m), r)
 }
 
+/// MultiplyByQuantizedMultiplier for an int64 accumulator (int16 kernels): the multiplier cut to 16 bits, one
+/// rounding shift
+pub fn mul_by_quantized_multiplier_i64(x: i64, m: i32, shift: i32) -> i32 {
+    let reduced = if m < 0x7FFF0000 { ((m + (1 << 15)) >> 16) as i64 } else { 0x7FFF };
+    let total_shift = 15 - shift;
+    (x.wrapping_mul(reduced).wrapping_add(1i64 << (total_shift - 1)) >> total_shift) as i32
+}
+
 /// static_cast<int32_t>(std::round(x)) as x86 runs it (half away from zero; the minimum when out of range or NaN)
 /// without the libm call that round() is on baseline x86-64: x - trunc(x) is exact for |x| < 2^31
 pub fn round_i32(x: f64) -> i32 {
