@@ -20,46 +20,69 @@ fn err<T>(msg: String) -> Result<T> {
 }
 
 // *** element access (little endian, any alignment) ***
-
-fn rd_i64(t: TType, d: &[u8], i: usize) -> i64 {
-    match t {
-        TType::U8 => d[i] as i64,
-        TType::I8 => d[i] as i8 as i64,
-        TType::Bool => (d[i] != 0) as i64,
-        TType::I16 => i16::from_le_bytes([d[2 * i], d[2 * i + 1]]) as i64,
-        TType::I32 => i32::from_le_bytes(d[4 * i..4 * i + 4].try_into().unwrap()) as i64,
-        TType::I64 => i64::from_le_bytes(d[8 * i..8 * i + 8].try_into().unwrap()),
-        _ => rd_f64(t, d, i) as i64,
-    }
-}
-
-fn rd_f64(t: TType, d: &[u8], i: usize) -> f64 {
-    match t {
-        TType::F32 => rd_f32(d, i) as f64,
-        TType::F64 => f64::from_le_bytes(d[8 * i..8 * i + 8].try_into().unwrap()),
-        _ => rd_i64(t, d, i) as f64,
-    }
-}
+// Whole tensors at once, so the match on the type stays out of the per-element loops. An unsupported type panics,
+// which the public entry points turn into an Error (crate::guard).
 
 fn rd_f32(d: &[u8], i: usize) -> f32 {
     f32::from_le_bytes(d[4 * i..4 * i + 4].try_into().unwrap())
 }
 
-fn wr_i64(t: TType, d: &mut [u8], i: usize, v: i64) {
+fn wr_f32(d: &mut [u8], i: usize, v: f32) {
+    d[4 * i..4 * i + 4].copy_from_slice(&v.to_le_bytes());
+}
+
+/// the elements of an integer or bool tensor
+fn ints(t: TType, d: &[u8]) -> Vec<i64> {
     match t {
-        TType::U8 | TType::I8 => d[i] = v as u8,
-        TType::Bool => d[i] = (v != 0) as u8,
-        TType::I16 => d[2 * i..2 * i + 2].copy_from_slice(&(v as i16).to_le_bytes()),
-        TType::I32 => d[4 * i..4 * i + 4].copy_from_slice(&(v as i32).to_le_bytes()),
-        TType::I64 => d[8 * i..8 * i + 8].copy_from_slice(&v.to_le_bytes()),
-        TType::F32 => wr_f32(d, i, v as f32),
-        TType::F64 => d[8 * i..8 * i + 8].copy_from_slice(&(v as f64).to_le_bytes()),
-        _ => {}
+        TType::U8 => d.iter().map(|&x| x as i64).collect(),
+        TType::I8 => d.iter().map(|&x| x as i8 as i64).collect(),
+        TType::Bool => d.iter().map(|&x| (x != 0) as i64).collect(),
+        TType::I16 => d.chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]]) as i64).collect(),
+        TType::I32 => d.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().unwrap()) as i64).collect(),
+        TType::I64 => d.chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap())).collect(),
+        t => panic!("{t:?} tensors are not supported here"),
     }
 }
 
-fn wr_f32(d: &mut [u8], i: usize, v: f32) {
-    d[4 * i..4 * i + 4].copy_from_slice(&v.to_le_bytes());
+fn f32s(d: &[u8]) -> Vec<f32> {
+    d.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect()
+}
+
+/// the elements of any numeric tensor as double (exact for every supported type but int64)
+fn f64s(t: TType, d: &[u8]) -> Vec<f64> {
+    match t {
+        TType::F32 => d.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap()) as f64).collect(),
+        TType::F64 => d.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap())).collect(),
+        t => ints(t, d).into_iter().map(|x| x as f64).collect(),
+    }
+}
+
+/// store integers into a tensor of type `t`: integers wrap to its width, floats take the nearest value
+fn put_ints(t: TType, d: &mut [u8], v: &[i64]) {
+    match t {
+        TType::U8 | TType::I8 => d.iter_mut().zip(v).for_each(|(o, &x)| *o = x as u8),
+        TType::Bool => d.iter_mut().zip(v).for_each(|(o, &x)| *o = (x != 0) as u8),
+        TType::I16 => d.chunks_exact_mut(2).zip(v).for_each(|(o, &x)| o.copy_from_slice(&(x as i16).to_le_bytes())),
+        TType::I32 => d.chunks_exact_mut(4).zip(v).for_each(|(o, &x)| o.copy_from_slice(&(x as i32).to_le_bytes())),
+        TType::I64 => d.chunks_exact_mut(8).zip(v).for_each(|(o, &x)| o.copy_from_slice(&x.to_le_bytes())),
+        TType::F32 => d.chunks_exact_mut(4).zip(v).for_each(|(o, &x)| o.copy_from_slice(&(x as f32).to_le_bytes())),
+        TType::F64 => d.chunks_exact_mut(8).zip(v).for_each(|(o, &x)| o.copy_from_slice(&(x as f64).to_le_bytes())),
+        t => panic!("{t:?} tensors are not supported here"),
+    }
+}
+
+fn put_f32s(d: &mut [u8], v: &[f32]) {
+    d.chunks_exact_mut(4).zip(v).for_each(|(o, &x)| o.copy_from_slice(&x.to_le_bytes()));
+}
+
+/// store doubles into a tensor of type `t` like static_cast: rounded to float, truncated to integers
+fn put_f64s(t: TType, d: &mut [u8], v: &[f64]) {
+    match t {
+        TType::F32 => d.chunks_exact_mut(4).zip(v).for_each(|(o, &x)| o.copy_from_slice(&(x as f32).to_le_bytes())),
+        TType::F64 => d.chunks_exact_mut(8).zip(v).for_each(|(o, &x)| o.copy_from_slice(&x.to_le_bytes())),
+        TType::Bool => d.iter_mut().zip(v).for_each(|(o, &x)| *o = (x != 0.0) as u8),
+        t => put_ints(t, d, &v.iter().map(|&x| x as i64).collect::<Vec<_>>()),
+    }
 }
 
 fn type_range(t: TType) -> (i32, i32) {
@@ -96,6 +119,17 @@ fn mul_smaller_than_one_exp(x: i32, m: i32, left_shift: i32) -> i32 {
 fn mul_by_quantized_multiplier(x: i32, m: i32, shift: i32) -> i32 {
     let (l, r) = (shift.max(0), (-shift).max(0));
     rounding_divide_by_pot(srdhm(x.wrapping_mul(1 << l), m), r)
+}
+
+/// x.round() as i32 (half away from zero, saturating) without the libm call that round() is on baseline x86-64:
+/// x - trunc(x) is exact for |x| < 2^31
+fn round_i32(x: f64) -> i32 {
+    if x.is_nan() || x.abs() >= 2147483648.0 {
+        return x.round() as i32;
+    }
+    let t = x as i64;
+    let f = x - t as f64;
+    (t + (f >= 0.5) as i64 - (f <= -0.5) as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32
 }
 
 fn frexp(x: f64) -> (f64, i32) {
@@ -167,40 +201,53 @@ fn clamp_f(x: f32, lo: f32, hi: f32) -> f32 {
 
 // *** broadcasting ***
 
-/// (index into a, index into b) for every output element, numpy-style broadcasting in row-major order
-fn broadcast(out: &[usize], a: &[usize], b: &[usize]) -> Result<Vec<(usize, usize)>> {
+/// Call f(output index, index into a, index into b) for every output element, numpy-style broadcasting in row-major
+/// order. Neighbouring dimensions both inputs step through alike are merged, so the inner loop runs as long as it can
+/// (the whole tensor when the shapes match or one side is a scalar).
+fn broadcast(out: &[usize], a: &[usize], b: &[usize], mut f: impl FnMut(usize, usize, usize)) -> Result<()> {
     let r = out.len().max(a.len()).max(b.len());
     let pad = |s: &[usize]| [vec![1; r - s.len()], s.to_vec()].concat();
     let (o, a, b) = (pad(out), pad(a), pad(b));
-    let strides = |s: &[usize]| -> Result<Vec<usize>> {
-        let mut st = vec![0; r];
-        let mut acc = 1;
-        for i in (0..r).rev() {
-            st[i] = if s[i] == o[i] { acc } else if s[i] == 1 { 0 } else { return err(format!("cannot broadcast {s:?} to {o:?}")) };
-            acc *= s[i];
-        }
-        Ok(st)
-    };
-    let (sa, sb) = (strides(&a)?, strides(&b)?);
-    let n: usize = o.iter().product();
-    let mut idx = vec![0; r];
-    let (mut ia, mut ib) = (0, 0);
-    let mut res = Vec::with_capacity(n);
-    for _ in 0..n {
-        res.push((ia, ib));
-        for d in (0..r).rev() {
-            idx[d] += 1;
-            ia += sa[d];
-            ib += sb[d];
-            if idx[d] < o[d] {
-                break;
-            }
-            ia -= sa[d] * o[d];
-            ib -= sb[d] * o[d];
-            idx[d] = 0;
+    // (size, stride in a, stride in b) per dimension, innermost first
+    let mut dims: Vec<(usize, usize, usize)> = Vec::new();
+    let (mut acc_a, mut acc_b) = (1, 1);
+    for d in (0..r).rev() {
+        let stride = |s: &[usize], acc: usize| match s[d] {
+            n if n == o[d] => Ok(acc),
+            1 => Ok(0),
+            _ => err(format!("cannot broadcast {s:?} to {o:?}")),
+        };
+        let (sa, sb) = (stride(&a, acc_a)?, stride(&b, acc_b)?);
+        (acc_a, acc_b) = (acc_a * a[d], acc_b * b[d]);
+        match dims.last_mut() {
+            _ if o[d] == 1 => {}
+            Some(inner) if inner.1 * inner.0 == sa && inner.2 * inner.0 == sb => inner.0 *= o[d],
+            _ => dims.push((o[d], sa, sb)),
         }
     }
-    Ok(res)
+    let (n, sa, sb) = dims.first().copied().unwrap_or((1, 0, 0));
+    let outer = dims.get(1..).unwrap_or_default();
+    let total: usize = o.iter().product();
+    let mut idx = vec![0; outer.len()];
+    let (mut i, mut ia, mut ib) = (0, 0, 0);
+    while i < total {
+        for j in 0..n {
+            f(i + j, ia + j * sa, ib + j * sb);
+        }
+        i += n;
+        for (k, &(len, sa, sb)) in outer.iter().enumerate() {
+            idx[k] += 1;
+            ia += sa;
+            ib += sb;
+            if idx[k] < len {
+                break;
+            }
+            ia -= sa * len;
+            ib -= sb * len;
+            idx[k] = 0;
+        }
+    }
+    Ok(())
 }
 
 // *** ops ***
@@ -208,9 +255,9 @@ fn broadcast(out: &[usize], a: &[usize], b: &[usize]) -> Result<Vec<(usize, usiz
 pub fn eval(node: &Node, ins: &[In], outs: &mut [Out]) -> Result<()> {
     match &node.kind {
         Kind::Add | Kind::Sub | Kind::Mul | Kind::Div => binary(node, &ins[0], &ins[1], &mut outs[0]),
-        Kind::Quantize => quantize(&ins[0], &mut outs[0]),
-        Kind::Dequantize => dequantize(&ins[0], &mut outs[0]),
-        Kind::Cast => cast(&ins[0], &mut outs[0]),
+        Kind::Quantize => by_table(&ins[0], &mut outs[0], quantize),
+        Kind::Dequantize => by_table(&ins[0], &mut outs[0], dequantize),
+        Kind::Cast => by_table(&ins[0], &mut outs[0], cast),
         Kind::Reshape => copy_all(&ins[0], &mut outs[0]),
         Kind::ArgMax => arg_max(&ins[0], &ins[1], &mut outs[0]),
         Kind::FloorDiv => floor_div(&ins[0], &ins[1], &mut outs[0]),
@@ -224,12 +271,51 @@ pub fn eval(node: &Node, ins: &[In], outs: &mut [Out]) -> Result<()> {
     }
 }
 
+/// An elementwise op on a 1-byte type has only 256 results: work them out once with the kernel itself and look each
+/// element up (the same bytes, a fraction of the work on big tensors).
+fn by_table(i: &In, o: &mut Out, kernel: fn(&In, &mut Out) -> Result<()>) -> Result<()> {
+    let n = i.info.elements();
+    if i.info.dtype.size() != 1 || n <= 256 {
+        return kernel(i, o);
+    }
+    let with_256 = |t: &TensorInfo| TensorInfo {
+        name: String::new(),
+        shape: vec![256],
+        dtype: t.dtype,
+        scales: t.scales.clone(),
+        zero_points: t.zero_points.clone(),
+        quantized_dimension: t.quantized_dimension,
+        constant: None,
+    };
+    let (ti, to) = (with_256(i.info), with_256(o.info));
+    let (all, es): (Vec<u8>, usize) = ((0..=255).collect(), o.info.dtype.size());
+    let mut tab = vec![0u8; 256 * es];
+    kernel(&In { info: &ti, data: &all }, &mut Out { info: &to, data: &mut tab })?;
+    // the element size as a constant: a copy of N bytes is a move, of a runtime length a memcpy call
+    fn look_up<const N: usize>(dst: &mut [u8], bytes: &[u8], tab: &[u8]) {
+        let tab: Vec<[u8; N]> = tab.chunks_exact(N).map(|c| c.try_into().unwrap()).collect();
+        dst.chunks_exact_mut(N).zip(bytes).for_each(|(d, &b)| d.copy_from_slice(&tab[b as usize]));
+    }
+    match es {
+        1 => look_up::<1>(o.data, &i.data[..n], &tab),
+        2 => look_up::<2>(o.data, &i.data[..n], &tab),
+        4 => look_up::<4>(o.data, &i.data[..n], &tab),
+        _ => look_up::<8>(o.data, &i.data[..n], &tab),
+    }
+    Ok(())
+}
+
+/// f of every value a 1-byte integer type holds, indexed by its byte
+fn byte_table(t: TType, f: impl Fn(i32) -> i32) -> [i32; 256] {
+    std::array::from_fn(|b| f(if t == TType::I8 { b as u8 as i8 as i32 } else { b as i32 }))
+}
+
 fn binary(node: &Node, a: &In, b: &In, o: &mut Out) -> Result<()> {
-    let pairs = broadcast(&o.info.shape, &a.info.shape, &b.info.shape)?;
     let (ta, tb, to) = (a.info.dtype, b.info.dtype, o.info.dtype);
     if ta != tb || ta != to {
         return err(format!("{}: mixed types {ta:?} {tb:?} -> {to:?}", node.name));
     }
+    let (so_, sa_, sb_) = (&o.info.shape[..], &a.info.shape[..], &b.info.shape[..]);
     match (to, &node.kind) {
         (TType::U8 | TType::I8, Kind::Add | Kind::Sub) => {
             // add.cc / sub.cc Prepare: both inputs rescaled to twice the larger scale, shifted left by 20
@@ -244,53 +330,58 @@ fn binary(node: &Node, a: &In, b: &In, o: &mut Out) -> Result<()> {
             }
             let (off1, off2, offo) = (-a.info.zero_point(), -b.info.zero_point(), o.info.zero_point());
             let (lo, hi) = act_range_q(node.act, o.info);
-            for (i, &(ia, ib)) in pairs.iter().enumerate() {
-                let x = (off1 + rd_i64(ta, a.data, ia) as i32) * (1 << left_shift);
-                let y = (off2 + rd_i64(tb, b.data, ib) as i32) * (1 << left_shift);
-                let sum = mul_smaller_than_one_exp(x, m1, s1) + mul_smaller_than_one_exp(y, m2, s2);
-                let v = mul_smaller_than_one_exp(sum, mo, s_o) + offo;
-                wr_i64(to, o.data, i, v.clamp(lo, hi) as i64);
-            }
+            // each input's rescaled value depends on its own byte alone
+            let xa = byte_table(ta, |x| mul_smaller_than_one_exp((off1 + x) * (1 << left_shift), m1, s1));
+            let xb = byte_table(tb, |y| mul_smaller_than_one_exp((off2 + y) * (1 << left_shift), m2, s2));
+            let (da, db, od) = (a.data, b.data, &mut *o.data);
+            broadcast(so_, sa_, sb_, |i, ia, ib| {
+                let sum = xa[da[ia] as usize] + xb[db[ib] as usize];
+                od[i] = (mul_smaller_than_one_exp(sum, mo, s_o) + offo).clamp(lo, hi) as u8;
+            })?;
         }
         (TType::U8 | TType::I8, Kind::Mul) => {
             // mul.cc Prepare: the product of the float scales, in float, then widened
             let (m, shift) = quantize_multiplier((a.info.scale() * b.info.scale() / o.info.scale()) as f64);
             let (off1, off2, offo) = (-a.info.zero_point(), -b.info.zero_point(), o.info.zero_point());
             let (lo, hi) = act_range_q(node.act, o.info);
-            for (i, &(ia, ib)) in pairs.iter().enumerate() {
-                let x = off1 + rd_i64(ta, a.data, ia) as i32;
-                let y = off2 + rd_i64(tb, b.data, ib) as i32;
-                let v = offo + mul_by_quantized_multiplier(x.wrapping_mul(y), m, shift);
-                wr_i64(to, o.data, i, v.clamp(lo, hi) as i64);
-            }
+            let (xa, xb) = (byte_table(ta, |x| off1 + x), byte_table(tb, |y| off2 + y));
+            let (da, db, od) = (a.data, b.data, &mut *o.data);
+            broadcast(so_, sa_, sb_, |i, ia, ib| {
+                let (x, y) = (xa[da[ia] as usize], xb[db[ib] as usize]);
+                od[i] = (offo + mul_by_quantized_multiplier(x.wrapping_mul(y), m, shift)).clamp(lo, hi) as u8;
+            })?;
         }
         (TType::F32, k) => {
             let (lo, hi) = act_range_f(node.act);
-            for (i, &(ia, ib)) in pairs.iter().enumerate() {
-                let (x, y) = (rd_f32(a.data, ia), rd_f32(b.data, ib));
-                let v = match k {
+            let (xa, xb, mut v) = (f32s(a.data), f32s(b.data), vec![0.0; o.info.elements()]);
+            broadcast(so_, sa_, sb_, |i, ia, ib| {
+                let (x, y) = (xa[ia], xb[ib]);
+                let r = match k {
                     Kind::Add => x + y,
                     Kind::Sub => x - y,
                     Kind::Mul => x * y,
                     _ => x / y,
                 };
-                wr_f32(o.data, i, clamp_f(v, lo, hi));
-            }
+                v[i] = clamp_f(r, lo, hi);
+            })?;
+            put_f32s(o.data, &v);
         }
         (TType::I32 | TType::I64, Kind::Add | Kind::Sub | Kind::Mul) => {
             let (lo, hi) = act_range_f(node.act);
             let (lo, hi) = (if node.act == Act::None { i64::MIN } else { lo as i64 }, if hi == f32::MAX { i64::MAX } else { hi as i64 });
-            for (i, &(ia, ib)) in pairs.iter().enumerate() {
-                let (x, y) = (rd_i64(ta, a.data, ia), rd_i64(tb, b.data, ib));
-                let v = match node.kind {
+            let (xa, xb, mut v) = (ints(ta, a.data), ints(tb, b.data), vec![0; o.info.elements()]);
+            broadcast(so_, sa_, sb_, |i, ia, ib| {
+                let (x, y) = (xa[ia], xb[ib]);
+                let r = match node.kind {
                     Kind::Add => x.wrapping_add(y),
                     Kind::Sub => x.wrapping_sub(y),
                     _ => x.wrapping_mul(y),
                 };
                 // int32 arithmetic wraps at 32 bits before the activation clamp
-                let v = if to == TType::I32 { v as i32 as i64 } else { v };
-                wr_i64(to, o.data, i, v.clamp(lo, hi));
-            }
+                let r = if to == TType::I32 { r as i32 as i64 } else { r };
+                v[i] = r.clamp(lo, hi);
+            })?;
+            put_ints(to, o.data, &v);
         }
         (t, _) => return err(format!("{} on {t:?} is not supported", node.name)),
     }
@@ -299,24 +390,21 @@ fn binary(node: &Node, a: &In, b: &In, o: &mut Out) -> Result<()> {
 
 fn quantize(i: &In, o: &mut Out) -> Result<()> {
     let (lo, hi) = type_range(o.info.dtype);
-    let n = o.info.elements();
     match (i.info.dtype, o.info.dtype) {
         (TType::F32, TType::U8 | TType::I8) => {
             // optimized_ops::AffineQuantize: divides by the scale as a double
             let (scale, zp) = (o.info.scale() as f64, o.info.zero_point());
-            for k in 0..n {
-                let v = ((rd_f32(i.data, k) as f64) / scale).round() as i32 + zp;
-                wr_i64(o.info.dtype, o.data, k, v.clamp(lo, hi) as i64);
+            for (d, c) in o.data.iter_mut().zip(i.data.chunks_exact(4)) {
+                let x = f32::from_le_bytes(c.try_into().unwrap());
+                *d = round_i32(x as f64 / scale).wrapping_add(zp).clamp(lo, hi) as u8;
             }
         }
         (TType::U8 | TType::I8, TType::U8 | TType::I8) => {
             // Requantize with QuantizeMultiplier(input scale / output scale)
             let (m, shift) = quantize_multiplier(i.info.scale() as f64 / o.info.scale() as f64);
             let (izp, ozp) = (i.info.zero_point(), o.info.zero_point());
-            for k in 0..n {
-                let v = mul_by_quantized_multiplier(rd_i64(i.info.dtype, i.data, k) as i32 - izp, m, shift) + ozp;
-                wr_i64(o.info.dtype, o.data, k, v.clamp(lo, hi) as i64);
-            }
+            let v = byte_table(i.info.dtype, |x| (mul_by_quantized_multiplier(x - izp, m, shift) + ozp).clamp(lo, hi));
+            o.data.iter_mut().zip(i.data).for_each(|(d, &b)| *d = v[b as usize] as u8);
         }
         (a, b) => return err(format!("QUANTIZE {a:?} -> {b:?} is not supported")),
     }
@@ -328,19 +416,16 @@ fn dequantize(i: &In, o: &mut Out) -> Result<()> {
         return err(format!("DEQUANTIZE {:?} -> {:?} is not supported", i.info.dtype, o.info.dtype));
     }
     let (scale, zp) = (i.info.scale() as f64, i.info.zero_point() as i64);
-    for k in 0..o.info.elements() {
-        wr_f32(o.data, k, (scale * (rd_i64(i.info.dtype, i.data, k) - zp) as f64) as f32);
-    }
+    let v: Vec<f32> = ints(i.info.dtype, i.data).into_iter().map(|x| (scale * (x - zp) as f64) as f32).collect();
+    put_f32s(o.data, &v);
     Ok(())
 }
 
+/// static_cast of every element
 fn cast(i: &In, o: &mut Out) -> Result<()> {
-    for k in 0..o.info.elements() {
-        match o.info.dtype {
-            TType::F32 => wr_f32(o.data, k, if i.info.dtype == TType::F64 { rd_f64(TType::F64, i.data, k) as f32 } else if i.info.dtype == TType::F32 { rd_f32(i.data, k) } else { rd_i64(i.info.dtype, i.data, k) as f32 }),
-            TType::Bool => wr_i64(TType::Bool, o.data, k, (rd_f64(i.info.dtype, i.data, k) != 0.0) as i64),
-            t => wr_i64(t, o.data, k, rd_i64(i.info.dtype, i.data, k)),
-        }
+    match i.info.dtype {
+        TType::F32 | TType::F64 => put_f64s(o.info.dtype, o.data, &f64s(i.info.dtype, i.data)),
+        t => put_ints(o.info.dtype, o.data, &ints(t, i.data)),
     }
     Ok(())
 }
@@ -355,9 +440,7 @@ fn unary_f32(i: &In, o: &mut Out, f: fn(f32) -> f32) -> Result<()> {
     if i.info.dtype != TType::F32 {
         return err(format!("{:?} input is not supported here (float32 only)", i.info.dtype));
     }
-    for k in 0..o.info.elements() {
-        wr_f32(o.data, k, f(rd_f32(i.data, k)));
-    }
+    put_f32s(o.data, &f32s(i.data).into_iter().map(f).collect::<Vec<_>>());
     Ok(())
 }
 
@@ -371,42 +454,54 @@ fn axis_of(axis: i64, rank: usize) -> Result<usize> {
 
 fn arg_max(i: &In, axis: &In, o: &mut Out) -> Result<()> {
     let shape = &i.info.shape;
-    let ax = axis_of(rd_i64(axis.info.dtype, axis.data, 0), shape.len())?;
+    let ax = *ints(axis.info.dtype, axis.data).first().ok_or_else(|| Error("ARG_MAX without an axis".into()))?;
+    let ax = axis_of(ax, shape.len())?;
     let (outer, len, inner) = (shape[..ax].iter().product::<usize>(), shape[ax], shape[ax + 1..].iter().product::<usize>());
-    let t = i.info.dtype;
-    let float = matches!(t, TType::F32 | TType::F64);
-    for out in 0..outer {
-        for inn in 0..inner {
-            // the first index of the largest value (std::greater: ties keep the earlier one)
-            let at = |k: usize| (out * len + k) * inner + inn;
-            let mut best = 0;
-            for k in 1..len {
-                let better = if float { rd_f64(t, i.data, at(k)) > rd_f64(t, i.data, at(best)) } else { rd_i64(t, i.data, at(k)) > rd_i64(t, i.data, at(best)) };
-                if better {
-                    best = k;
-                }
-            }
-            wr_i64(o.info.dtype, o.data, out * inner + inn, best as i64);
-        }
-    }
+    let best = match i.info.dtype {
+        TType::F32 | TType::F64 => arg_max_along(&f64s(i.info.dtype, i.data), outer, len, inner),
+        t => arg_max_along(&ints(t, i.data), outer, len, inner),
+    };
+    put_ints(o.info.dtype, o.data, &best);
     Ok(())
 }
 
-fn floor_div(a: &In, b: &In, o: &mut Out) -> Result<()> {
-    let pairs = broadcast(&o.info.shape, &a.info.shape, &b.info.shape)?;
-    for (k, &(ia, ib)) in pairs.iter().enumerate() {
-        match o.info.dtype {
-            TType::F32 => wr_f32(o.data, k, (rd_f32(a.data, ia) / rd_f32(b.data, ib)).floor()),
-            TType::I32 => {
-                let (x, y) = (rd_i64(a.info.dtype, a.data, ia), rd_i64(b.info.dtype, b.data, ib));
-                if y == 0 {
-                    return err("FLOOR_DIV: division by 0".into());
+/// for each (outer, inner) position, the first index along the axis of the largest value (std::greater: ties keep
+/// the earlier one)
+fn arg_max_along<T: PartialOrd>(v: &[T], outer: usize, len: usize, inner: usize) -> Vec<i64> {
+    let mut res = Vec::with_capacity(outer * inner);
+    for out in 0..outer {
+        for inn in 0..inner {
+            let at = |k: usize| (out * len + k) * inner + inn;
+            let mut best = 0;
+            for k in 1..len {
+                if v[at(k)] > v[at(best)] {
+                    best = k;
                 }
-                // reference_ops::FloorDiv: std::floor of the double quotient
-                wr_i64(TType::I32, o.data, k, (x as f64 / y as f64).floor() as i64);
             }
-            t => return err(format!("FLOOR_DIV on {t:?} is not supported")),
+            res.push(best as i64);
         }
+    }
+    res
+}
+
+fn floor_div(a: &In, b: &In, o: &mut Out) -> Result<()> {
+    let (so, sa, sb) = (&o.info.shape[..], &a.info.shape[..], &b.info.shape[..]);
+    match o.info.dtype {
+        TType::F32 => {
+            let (xa, xb, mut v) = (f32s(a.data), f32s(b.data), vec![0.0; o.info.elements()]);
+            broadcast(so, sa, sb, |i, ia, ib| v[i] = (xa[ia] / xb[ib]).floor())?;
+            put_f32s(o.data, &v);
+        }
+        TType::I32 => {
+            let (xa, xb, mut v) = (ints(a.info.dtype, a.data), ints(b.info.dtype, b.data), vec![0; o.info.elements()]);
+            if xb.contains(&0) {
+                return err("FLOOR_DIV: division by 0".into());
+            }
+            // reference_ops::FloorDiv: std::floor of the double quotient
+            broadcast(so, sa, sb, |i, ia, ib| v[i] = (xa[ia] as f64 / xb[ib] as f64).floor() as i64)?;
+            put_ints(TType::I32, o.data, &v);
+        }
+        t => return err(format!("FLOOR_DIV on {t:?} is not supported")),
     }
     Ok(())
 }
@@ -492,10 +587,11 @@ fn gather_nd(p: &In, idx: &In, o: &mut Out) -> Result<()> {
         *c = remain / pshape[j].max(1);
         remain = *c;
     }
+    let indices = ints(idx.info.dtype, idx.data);
     for s in 0..slices {
         let mut from = 0;
         for j in 0..nd {
-            let v = rd_i64(idx.info.dtype, idx.data, s * nd + j);
+            let v = indices[s * nd + j];
             if v < 0 || v as usize >= pshape[j] {
                 return err(format!("GATHER_ND index {v} out of range [0, {})", pshape[j]));
             }
@@ -544,10 +640,20 @@ pub mod dpp {
     /// std::partial_sort(indices, k) by decreasing value: heap select, then sort_heap. The result for equal values
     /// depends on these exact heap steps (identical in libstdc++ and the MSVC STL), and quantized scores tie a lot.
     fn decreasing_partial_arg_sort(values: &[f32], k: usize) -> Vec<usize> {
+        if k == 1 && !values.is_empty() {
+            // a heap of one: an element replaces the top only when strictly greater, so the first largest stays
+            let mut best = 0;
+            for (i, &v) in values.iter().enumerate().skip(1) {
+                if v > values[best] {
+                    best = i;
+                }
+            }
+            return vec![best];
+        }
         let less = |a: usize, b: usize| values[a] > values[b];
         let mut ix: Vec<usize> = (0..values.len()).collect();
         // __adjust_heap: move the hole at `hole` down to a leaf, then push `v` back up (max-heap under `less`)
-        fn adjust(ix: &mut [usize], mut hole: usize, len: usize, v: usize, less: &dyn Fn(usize, usize) -> bool) {
+        fn adjust(ix: &mut [usize], mut hole: usize, len: usize, v: usize, less: &impl Fn(usize, usize) -> bool) {
             let top = hole;
             let mut child = hole;
             while child < (len.saturating_sub(1)) / 2 {
@@ -731,7 +837,7 @@ pub mod dpp {
         }
         let scores: Vec<f32> = match cls.info.dtype {
             TType::U8 => (0..num_boxes * with_bg).map(|i| deq(cls, i)).collect(),
-            TType::F32 => (0..num_boxes * with_bg).map(|i| rd_f32(cls.data, i)).collect(),
+            TType::F32 => super::f32s(&cls.data[..num_boxes * with_bg * 4]),
             t => return err(format!("detection postprocess on {t:?} scores is not supported")),
         };
         let (rows, n) = if o.use_regular_nms { regular(o, &boxes, &scores, with_bg, label_offset)? } else { fast(o, &boxes, &scores, with_bg, label_offset)? };
