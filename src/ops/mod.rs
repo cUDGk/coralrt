@@ -12,6 +12,7 @@ mod data;
 mod dense;
 mod dpp;
 mod eigen;
+mod lookup;
 mod movement;
 mod norm;
 mod pool;
@@ -64,7 +65,7 @@ pub trait Kernel: Send {
 }
 
 pub fn create(s: &OpSpec) -> Result<Box<dyn Kernel>> {
-    for module in [binary::create, conv::create, data::create, dense::create, movement::create, norm::create, pool::create, quant::create, reduce::create, resize::create, shape::create, unary::create] {
+    for module in [binary::create, conv::create, data::create, dense::create, lookup::create, movement::create, norm::create, pool::create, quant::create, reduce::create, resize::create, shape::create, unary::create] {
         if let Some(k) = module(s)? {
             return Ok(k);
         }

@@ -547,5 +547,40 @@ def conv_cases():
   return out
 
 
+def lookup_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  i32 = lambda shape, v: T(shape, "int32", value=v)
+  c("EMBEDDING_LOOKUP_f32", "EMBEDDING_LOOKUP", [i32([4], [0, 4, 2, 2]), T([5, 3], data=const([5, 3], "float32", 400))], [T([])])
+  c("EMBEDDING_LOOKUP_f32_3d", "EMBEDDING_LOOKUP", [i32([3], [1, 0, 1]), T([2, 2, 3], data=const([2, 2, 3], "float32", 401))], [T([])])
+  c("EMBEDDING_LOOKUP_hybrid_int8", "EMBEDDING_LOOKUP", [i32([3], [3, 0, 1]), T([4, 5], "int8", (0.1, 0), data=const([4, 5], "int8", 402))], [T([])])
+  c("EMBEDDING_LOOKUP_hybrid_uint8", "EMBEDDING_LOOKUP", [i32([3], [3, 0, 1]), T([4, 5], "uint8", (0.1, 0), data=const([4, 5], "uint8", 403))], [T([])])
+  c("EMBEDDING_LOOKUP_uint8", "EMBEDDING_LOOKUP", [i32([3], [3, 0, 1]), T([4, 5], "uint8", (0.1, 7), data=const([4, 5], "uint8", 404))], [T([], "uint8", (0.1, 7))])
+  c("EMBEDDING_LOOKUP_out_of_range", "EMBEDDING_LOOKUP", [i32([2], [0, 5]), T([5, 3], data=const([5, 3], "float32", 405))], [T([])])
+  for comb in [0, 1, 2]:
+    c(f"EMBEDDING_LOOKUP_SPARSE_{comb}", "EMBEDDING_LOOKUP_SPARSE",
+      [i32([5], [0, 1, 3, 2, 1]), i32([5, 2], [[0, 0], [0, 1], [1, 0], [2, 0], [2, 1]]), T([2], "int32", data=[3, 2]), T([5], gen=("uniform", 0.5, 2.0)),
+       T([4, 3], data=const([4, 3], "float32", 410))], [T([])], ("EmbeddingLookupSparseOptions", {"combiner": comb}))
+    c(f"EMBEDDING_LOOKUP_SPARSE_3d_{comb}", "EMBEDDING_LOOKUP_SPARSE",
+      [i32([4], [2, 0, 1, 2]), i32([4, 3], [[0, 0, 0], [0, 1, 1], [1, 0, 0], [1, 1, 0]]), T([3], "int32", data=[2, 2, 2]), T([4], gen=("uniform", -1.0, 2.0)),
+       T([3, 2, 2], data=const([3, 2, 2], "float32", 411))], [T([])], ("EmbeddingLookupSparseOptions", {"combiner": comb}))
+  for name, keys in [("sorted", [1, 3, 5, 7, 9]), ("duplicates", [1, 3, 3, 3, 9]), ("unsorted", [9, 1, 7, 3, 5])]:
+    c(f"HASHTABLE_LOOKUP_{name}", "HASHTABLE_LOOKUP", [i32([7], [1, 5, 9, 3, 4, 100, -7]), T([5], "int32", data=keys), T([5, 2], data=const([5, 2], "float32", 420))],
+      [T([]), T([], "uint8")])
+  c("HASHTABLE_LOOKUP_string", "HASHTABLE_LOOKUP", [i32([4], [3, 2, 9, 1]), T([3], "int32", data=[1, 3, 9]), T([3], "string", data=[b"one", b"three", b"nine"])],
+    [T([], "string"), T([], "uint8")])
+  hashes = T([3, 4], data=const([3, 4], "float32", 430, -10.0, 10.0))
+  for kind, typ in [("sparse", 1), ("dense", 2)]:
+    c(f"LSH_PROJECTION_{kind}", "LSH_PROJECTION", [hashes, T([5], "int32"), T([5], gen=("uniform", -1.0, 1.0))], [T([], "int32")], ("LSHProjectionOptions", {"type": typ}))
+    c(f"LSH_PROJECTION_{kind}_noweights", "LSH_PROJECTION", [hashes, T([4, 2])], [T([], "int32")], ("LSHProjectionOptions", {"type": typ}))
+    c(f"LSH_PROJECTION_{kind}_long_rows", "LSH_PROJECTION", [hashes, T([3, 30])], [T([], "int32")], ("LSHProjectionOptions", {"type": typ}))
+  sgo = lambda n, skip, everything: ("SkipGramOptions", {"ngramSize": n, "maxSkipSize": skip, "includeAllNgrams": everything})
+  for k, text in enumerate([b"the quick brown fox jumps", b" a  b\tc ", b"one"]):
+    for n, skip, everything in [(2, 1, False), (2, 0, True), (3, 2, True)]:
+      c(f"SKIP_GRAM_{k}_{n}{skip}{int(everything)}", "SKIP_GRAM", [T([1], "string", value=[text])], [T([], "string")], sgo(n, skip, everything))
+  return out
+
+
 def all_cases():
-  return binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases() + nn_cases()
+  return (binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases() + nn_cases()
+          + lookup_cases())
