@@ -621,6 +621,21 @@ def control_cases():
   return out
 
 
+def complex_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  for op in ["REAL", "IMAG", "COMPLEX_ABS"]:
+    for dt, ot in [("complex64", "float32"), ("complex128", "float64")]:
+      c(f"{op}_{dt}", op, [T([3, 40], dt, gen=("uniform", -1e3, 1e3))], [T([], ot)])
+  c("COMPLEX_ABS_extremes", "COMPLEX_ABS", [T([6], "complex64", value=[0j, 3 + 4j, 1e30 + 1e30j, 1e-30 - 1e-30j, -0.0 + 0j, 1e-45 + 0j])], [T([])])
+  # (input shape, fft lengths): exact fit, crop, zero pad, one row, and lengths large enough for Ooura's longer paths
+  for k, (shape, fl) in enumerate([([4, 8], [4, 8]), ([8, 16], [4, 8]), ([2, 3, 5, 6], [4, 8]), ([1, 8], [1, 8]), ([3, 2], [4, 4]),
+                                   ([2, 1024], [2, 1024]), ([512, 4], [512, 4]), ([64, 128], [64, 128]), ([1, 2048], [1, 2048])]):
+    c(f"RFFT2D_{k}", "RFFT2D", [T(shape), T([2], "int32", data=fl)], [T([], "complex64")])
+  c("RFFT2D_length_input", "RFFT2D", [T([5, 7]), T([2], "int32", value=[8, 16])], [T([], "complex64")])
+  return out
+
+
 def all_cases():
   return (binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases() + nn_cases()
-          + lookup_cases() + control_cases())
+          + lookup_cases() + control_cases() + complex_cases())
