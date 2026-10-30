@@ -482,6 +482,33 @@ def conv_cases():
         cvo(pad, s, d, "RELU" if k == 1 else "NONE"))
     c(f"CONV_2D_hybrid_pc_{k}", "CONV_2D", [T(shape), T(fs, "int8", (scales, [0] * oc, 0), data=const(fs, "int8", 130 + k, -127, 127)),
                                             T([oc], data=const([oc], "float32", 140 + k))], [T([])], cvo(pad, s, d, "RELU6" if k == 2 else "NONE"))
+  dwo = lambda pad, s, d, dm, act="NONE": ("DepthwiseConv2DOptions", {"padding": PAD[pad], "strideW": s[1], "strideH": s[0], "depthMultiplier": dm,
+                                                                     "fusedActivationFunction": ACT[act], "dilationWFactor": d[1], "dilationHFactor": d[0]})
+  # (input shape, filter (height, width), depth multiplier, stride, dilation, padding)
+  dgeoms = [([1, 5, 5, 3], (3, 3), 1, (1, 1), (1, 1), "SAME"), ([2, 7, 6, 2], (3, 2), 2, (2, 2), (1, 1), "VALID"), ([1, 6, 6, 4], (1, 1), 1, (1, 1), (1, 1), "SAME"),
+            ([1, 8, 7, 3], (3, 3), 2, (1, 1), (2, 2), "SAME"), ([1, 6, 5, 2], (2, 3), 3, (2, 1), (1, 2), "VALID")]
+  for k, (shape, (fh, fw), dm, s, d, pad) in enumerate(dgeoms):
+    oc = shape[3] * dm
+    fs = [1, fh, fw, oc]
+    scales = [0.02 + 0.005 * j for j in range(oc)]
+    pc = lambda base: ([base * x for x in scales], [0] * oc, 0)
+    pcf = (scales, [0] * oc, 3)
+    for act in (["NONE", "RELU", "RELU6", "RELU_N1_TO_1"] if k == 0 else ["NONE"]):
+      c(f"DEPTHWISE_CONV_2D_f32_{k}_{act}", "DEPTHWISE_CONV_2D", [T(shape), T(fs, data=const(fs, "float32", 160 + k)), T([oc], data=const([oc], "float32", 170 + k))],
+        [T([])], dwo(pad, s, d, dm, act))
+      c(f"DEPTHWISE_CONV_2D_uint8_{k}_{act}", "DEPTHWISE_CONV_2D", [T(shape, "uint8", (0.05, 128)), T(fs, "uint8", (0.02, 120), data=const(fs, "uint8", 180 + k)),
+                                                                   T([oc], "int32", (0.001, 0), data=const([oc], "int32", 190 + k, -3000, 3000))],
+        [T([], "uint8", (0.1, 120))], dwo(pad, s, d, dm, act))
+      c(f"DEPTHWISE_CONV_2D_int8_{k}_{act}", "DEPTHWISE_CONV_2D", [T(shape, "int8", (0.05, 3)), T(fs, "int8", pcf, data=const(fs, "int8", 200 + k, -127, 127)),
+                                                                  T([oc], "int32", pc(0.05), data=const([oc], "int32", 210 + k, -3000, 3000))],
+        [T([], "int8", (0.1, -2))], dwo(pad, s, d, dm, act))
+    c(f"DEPTHWISE_CONV_2D_int16_{k}", "DEPTHWISE_CONV_2D", [T(shape, "int16", (0.001, 0)), T(fs, "int8", pcf, data=const(fs, "int8", 220 + k, -127, 127)),
+                                                           T([oc], "int64", pc(0.001), data=const([oc], "int64", 230 + k, -100000, 100000))],
+      [T([], "int16", (0.01, 0))], dwo(pad, s, d, dm))
+    c(f"DEPTHWISE_CONV_2D_hybrid_{k}", "DEPTHWISE_CONV_2D", [T(shape), T(fs, "int8", pcf, data=const(fs, "int8", 240 + k, -127, 127)),
+                                                            T([oc], data=const([oc], "float32", 250 + k))], [T([])], dwo(pad, s, d, dm, "RELU6" if k == 1 else "NONE"))
+  c("DEPTHWISE_CONV_2D_int16_nobias", "DEPTHWISE_CONV_2D", [T([1, 4, 4, 2], "int16", (0.001, 0)), T([1, 3, 3, 2], "int8", ([0.02, 0.03], [0, 0], 3), data=const([1, 3, 3, 2], "int8", 260)), None],
+    [T([], "int16", (0.01, 0))], dwo("SAME", (1, 1), (1, 1), 1))
   # halves everywhere: the GEMM's rounding shows
   fs = [8, 3, 3, 8]
   for dt, zp in [("uint8", 128), ("int8", 0)]:

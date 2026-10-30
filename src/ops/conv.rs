@@ -20,6 +20,15 @@ pub fn create(s: &OpSpec) -> Result<Option<Box<dyn Kernel>>> {
             geom: Geom::default(),
             quant: Quant::default(),
         }),
+        4 => Box::new(DepthwiseConv2D {
+            padding: opt_padding(s, 0)?,
+            stride: (opt(s, 2, 0), opt(s, 1, 0)),
+            depth_multiplier: opt(s, 3, 0),
+            act: opt_act(s, 4)?,
+            dilation: (opt(s, 6, 1), opt(s, 5, 1)),
+            geom: Geom::default(),
+            quant: Quant::default(),
+        }),
         _ => return Ok(None),
     }))
 }
@@ -234,6 +243,174 @@ impl Conv2D {
             for (k, a) in acc.into_iter().enumerate() {
                 let scale = scales[(k / oc) / pixels_per_batch.max(1)] * f.scale();
                 v[k] = clamp_f((0.0 + a as f32 * scale) + b[k % oc], lo, hi);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// depthwise_conv.cc: each output channel from one input channel (channel / depth multiplier). 2.5's x86 kernels
+/// keep a running sum per output from its start value (the bias, or 0 for hybrid), taps in filter order; the 8-bit
+/// ones requantize with the reference MultiplyByQuantizedMultiplier, so everything here matches exactly, float too.
+struct DepthwiseConv2D {
+    padding: Padding,
+    stride: (i32, i32),
+    /// from the options: only the int16 and hybrid kernels use it; the others divide the channel counts
+    depth_multiplier: i32,
+    act: Act,
+    dilation: (i32, i32),
+    geom: Geom,
+    quant: Quant,
+}
+
+impl Kernel for DepthwiseConv2D {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let (i, f, bias) = (io.input(0)?, io.input(1)?, io.opt(2));
+        let o = &io.outs[0];
+        // with a third input listed, 2.5 reads it as the bias, so an absent one (-1) fails
+        if io.n_in() == 3 && bias.is_none() {
+            return err("the bias input is missing");
+        }
+        if i.shape.len() != 4 || f.shape.len() != 4 || f.shape[0] != 1 {
+            return err("DEPTHWISE_CONV_2D takes a 4-D input and a 1 x H x W x C filter");
+        }
+        let hybrid = i.dtype == TType::F32 && f.dtype == TType::I8;
+        if !matches!(i.dtype, TType::F32 | TType::U8 | TType::I8 | TType::I16) || o.dtype != i.dtype || !(hybrid || f.dtype == i.dtype || i.dtype == TType::I16) {
+            return err(format!("input {:?}, filter {:?}, output {:?} is not supported", i.dtype, f.dtype, o.dtype));
+        }
+        if i.dtype == TType::I16 && (i.zero_point() != 0 || o.zero_point() != 0) {
+            return err("int16 needs zero points 0");
+        }
+        let oc = f.shape[3];
+        if let Some(b) = bias {
+            let ok = match i.dtype {
+                TType::U8 | TType::I8 => b.dtype == TType::I32 && b.zero_point() == 0,
+                TType::I16 => b.dtype == TType::I64 && b.zero_point() == 0,
+                t => b.dtype == t,
+            };
+            if !ok || b.shape.len() != 1 || b.shape[0] != oc {
+                return err("the bias must have the input's accumulator type and one value per output channel");
+            }
+        }
+        let (fh, fw) = (f.shape[1], f.shape[2]);
+        let (oh, ph, _) = out_size_and_pad(self.padding, i.shape[1] as i32, fh as i32, self.stride.0, self.dilation.0);
+        let (ow, pw, _) = out_size_and_pad(self.padding, i.shape[2] as i32, fw as i32, self.stride.1, self.dilation.1);
+        if oh < 0 || ow < 0 {
+            return err("the filter is larger than the input");
+        }
+        self.geom = Geom {
+            batches: i.shape[0],
+            input: (i.shape[1], i.shape[2]),
+            in_ch: i.shape[3],
+            output: (oh as usize, ow as usize),
+            out_ch: oc,
+            filter: (fh, fw),
+            stride: self.stride,
+            dilation: self.dilation,
+            pad: (ph, pw),
+        };
+        if i.dtype != TType::F32 {
+            self.quant = conv_quant(i, f, bias, o, self.act, oc)?;
+        }
+        if hybrid && f.scales.len() != f.shape[(f.quantized_dimension as usize).min(3)] {
+            return err("a hybrid filter needs one scale per entry of its quantized dimension");
+        }
+        io.outs[0].resize(vec![i.shape[0], oh as usize, ow as usize, oc]);
+        Ok(())
+    }
+
+    fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let (i, f, bias) = (io.input(0)?, io.input(1)?, io.opt(2));
+        let o = &mut io.outs[0];
+        let g = &self.geom;
+        let (ic, oc) = (g.in_ch, g.out_ch);
+        let hybrid = i.dtype == TType::F32 && f.dtype == TType::I8;
+        let dm = if hybrid || i.dtype == TType::I16 {
+            self.depth_multiplier.max(1) as usize
+        } else {
+            if ic == 0 || oc % ic != 0 {
+                return err("the filter's channels must be a multiple of the input's");
+            }
+            oc / ic
+        };
+        let taps = g.taps();
+        // acc = mac(acc, input index, filter index) over the taps, per (output pixel, channel)
+        let dots = |init: &dyn Fn(usize) -> i64, mac: &dyn Fn(i64, usize, usize) -> i64| -> Vec<i64> {
+            let mut res = Vec::with_capacity(taps.len() * oc);
+            for t in &taps {
+                for c in 0..oc {
+                    res.push(t.iter().fold(init(c), |a, &(pixel, tap)| mac(a, pixel * ic + c / dm, tap * oc + c)));
+                }
+            }
+            res
+        };
+        match (i.dtype, f.dtype) {
+            (TType::F32, TType::F32) => {
+                let (x, w) = (i.as_slice::<f32>(), f.as_slice::<f32>());
+                let b = bias.map(|t| t.as_slice::<f32>());
+                let (lo, hi) = act_range_f(self.act);
+                let v = o.as_mut_slice::<f32>();
+                for (p, t) in taps.iter().enumerate() {
+                    for c in 0..oc {
+                        let acc = t.iter().fold(b.map_or(0.0, |b| b[c]), |a, &(pixel, tap)| a + w[tap * oc + c] * x[pixel * ic + c / dm]);
+                        // std::max(lo, std::min(hi, acc)): NaN becomes hi
+                        let m = if acc < hi { acc } else { hi };
+                        v[p * oc + c] = if lo < m { m } else { lo };
+                    }
+                }
+            }
+            (TType::F32, _) => {
+                let x = i.as_slice::<f32>();
+                let w: Vec<i64> = ints(f)?;
+                let per_batch = x.len() / g.batches.max(1);
+                let (mut q, mut scales, mut zps) = (Vec::with_capacity(x.len()), Vec::new(), Vec::new());
+                for row in x.chunks(per_batch.max(1)) {
+                    let (v, s, zp) = super::dense::quantize_row(row, true);
+                    q.extend(v.into_iter().map(|v| v as i64));
+                    scales.push(s);
+                    zps.push(zp as i64);
+                }
+                let acc = dots(&|_| 0, &|a, xi, wi| (a as i32).wrapping_add((w[wi] * (q[xi] - zps[xi / per_batch])) as i32) as i64);
+                let b = bias.map(|t| t.as_slice::<f32>());
+                let (lo, hi) = act_range_f(self.act);
+                let pixels = g.output.0 * g.output.1;
+                let v = o.as_mut_slice::<f32>();
+                for (k, a) in acc.into_iter().enumerate() {
+                    let c = k % oc;
+                    let r = (a as i32 as f32 * scales[k / oc / pixels.max(1)]) * f.scales[c] + b.map_or(0.0, |b| b[c]);
+                    v[k] = clamp_f(r, lo, hi);
+                }
+            }
+            (TType::I16, _) => {
+                let (x, w) = (ints(i)?, ints(f)?);
+                let b = bias.map(|t| t.as_slice::<i64>());
+                let acc = dots(&|_| 0, &|a, xi, wi| a + w[wi] * x[xi]);
+                let (lo, hi) = self.quant.act;
+                let res: Vec<i64> = acc
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, a)| {
+                        let (m, s) = self.quant.multipliers[k % oc];
+                        mul_by_quantized_multiplier_i64(a + b.map_or(0, |b| b[k % oc]), m, s).clamp(lo, hi) as i64
+                    })
+                    .collect();
+                put_ints(o, &res)?;
+            }
+            (t, _) => {
+                let (x, w) = (ints(i)?, ints(f)?);
+                let b = bias.map(|t| t.as_slice::<i32>());
+                let (xz, wz) = (i.zero_point() as i64, if t == TType::U8 { f.zero_point() as i64 } else { 0 });
+                let acc = dots(&|c| b.map_or(0, |b| b[c]) as i64, &|a, xi, wi| (a as i32).wrapping_add(((w[wi] - wz) * (x[xi] - xz)) as i32) as i64);
+                let (oz, (lo, hi)) = (o.zero_point(), self.quant.act);
+                let res: Vec<i64> = acc
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, a)| {
+                        let (m, s) = self.quant.multipliers[k % oc];
+                        mul_by_quantized_multiplier(a as i32, m, s).wrapping_add(oz).clamp(lo, hi) as i64
+                    })
+                    .collect();
+                put_ints(o, &res)?;
             }
         }
         Ok(())
