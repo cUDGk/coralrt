@@ -13,13 +13,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut interps: HashMap<String, Interpreter> = HashMap::new();
     let (mut cases, mut failed) = (0, 0);
     for line in std::fs::read_to_string(oracle.join("manifest.txt"))?.lines() {
+        // case, model, outputs[, inputs]: one input is <case>.in.bin, several are <case>.in<k>.bin
         let f: Vec<&str> = line.split('\t').collect();
         let (case, model, n) = (f[0], f[1], f[2].parse::<usize>()?);
+        let n_in: Option<usize> = f.get(3).map(|s| s.parse()).transpose()?;
         if !interps.contains_key(model) {
             interps.insert(model.to_string(), Interpreter::from_file(data.join(model), &Options::default())?);
         }
         let it = interps.get_mut(model).unwrap();
-        it.set_input(0, &std::fs::read(oracle.join(format!("{case}.in.bin")))?)?;
+        match n_in {
+            None => it.set_input(0, &std::fs::read(oracle.join(format!("{case}.in.bin")))?)?,
+            Some(n_in) => {
+                for k in 0..n_in {
+                    it.set_input(k, &std::fs::read(oracle.join(format!("{case}.in{k}.bin")))?)?;
+                }
+            }
+        }
         it.invoke()?;
         // TFLite_Detection_PostProcess (fast NMS) leaves the slots past the detection count as they were: compare the count
         let dpp = it.op_names().last() == Some(&"TFLite_Detection_PostProcess");
@@ -39,7 +48,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     println!("{cases} cases, {failed} mismatching outputs");
-    let timing = std::fs::read_to_string(oracle.join("timing.txt"))?;
+    // recorded only for the whole models (dump_pycoral.py)
+    let timing = std::fs::read_to_string(oracle.join("timing.txt")).unwrap_or_default();
     for line in timing.lines() {
         let f: Vec<&str> = line.split('\t').collect();
         let it = interps.get_mut(f[0]).unwrap();

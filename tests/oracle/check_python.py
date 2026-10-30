@@ -11,13 +11,16 @@ DATA, ORACLE = sys.argv[1], sys.argv[2]
 print(f"python {sys.version.split()[0]}, numpy {np.__version__}")
 interps, failed, cases = {}, 0, 0
 for line in open(os.path.join(ORACLE, "manifest.txt")):
-  case, model, n = line.split()
+  # case, model, outputs[, inputs]: one input is <case>.in.bin, several are <case>.in<k>.bin
+  f = line.split()
+  case, model = f[0], f[1]
   if model not in interps:
     interps[model] = make_interpreter(os.path.join(DATA, model))
     interps[model].allocate_tensors()
   it = interps[model]
-  inp = it.get_input_details()[0]
-  it.set_tensor(inp["index"], np.fromfile(os.path.join(ORACLE, f"{case}.in.bin"), inp["dtype"]).reshape(inp["shape"]))
+  for k, inp in enumerate(it.get_input_details()):
+    path = os.path.join(ORACLE, f"{case}.in{k}.bin" if len(f) > 3 else f"{case}.in.bin")
+    it.set_tensor(inp["index"], np.fromfile(path, inp["dtype"]).reshape(inp["shape"]))
   it.invoke()
   outs = it.get_output_details()
   # detection: the slots past the count are not defined by TFLite, compare the detections only
@@ -32,7 +35,9 @@ for line in open(os.path.join(ORACLE, "manifest.txt")):
       print(f"MISMATCH {case} output {k}: {np.count_nonzero(got != want)} of {got.size} values differ")
       failed += 1
 print(f"{cases} cases, {failed} mismatching outputs")
-for line in open(os.path.join(ORACLE, "timing.txt")):
+# recorded only for the whole models (dump_pycoral.py)
+timing = os.path.join(ORACLE, "timing.txt")
+for line in open(timing) if os.path.exists(timing) else []:
   model, ms = line.split()
   it = interps[model]
   ts = []

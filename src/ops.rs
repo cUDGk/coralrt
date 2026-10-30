@@ -672,6 +672,8 @@ pub mod dpp {
                 keep.push(i);
             }
         }
+        // TFLite 2.5 (pycoral's) sorts with partial_sort; 2.6 and later use stable_sort, which orders equal scores
+        // differently (with that one change this op matches TFLite 2.21 byte for byte, tests/oracle/cpu_slices.py)
         let sorted = decreasing_partial_arg_sort(&keep_scores, keep_scores.len());
         let size = keep.len().min(max_detections);
         let mut active = vec![true; keep.len()];
