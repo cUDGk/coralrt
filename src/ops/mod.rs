@@ -6,6 +6,7 @@
 pub mod fixedpoint;
 pub mod util;
 
+mod audio;
 mod binary;
 mod complex;
 mod control;
@@ -82,6 +83,9 @@ pub fn create(s: &OpSpec) -> Result<Box<dyn Kernel>> {
     match s.name {
         "edgetpu-custom-op" => Ok(Box::new(crate::edgetpu::EdgeTpuOp::new(s.custom_opts)?)),
         "TFLite_Detection_PostProcess" => Ok(Box::new(dpp::Dpp::new(s.custom_opts))),
+        "AudioSpectrogram" => Ok(Box::new(audio::AudioSpectrogram::new(s.custom_opts))),
+        "Mfcc" => Ok(Box::new(audio::Mfcc::new(s.custom_opts))),
+        "NumericVerify" => Ok(Box::new(quant::NumericVerify::new(s.custom_opts))),
         n => Err(Error(format!("op {n} (code {}, version {}) is not supported", s.code, s.version))),
     }
 }

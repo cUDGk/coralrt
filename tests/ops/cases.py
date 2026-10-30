@@ -898,6 +898,46 @@ def lstm_cases():
   return out
 
 
+def flex(d):
+  """custom options as a flexbuffer map (made by build.py only; official.py has no flexbuffers)"""
+  def make():
+    from flatbuffers import flexbuffers
+    return flexbuffers.Dumps(d)
+  return make
+
+
+def custom_cases():
+  """the custom ops of the BuiltinOpResolver besides TFLite_Detection_PostProcess"""
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  # AudioSpectrogram: [samples, channels]; 2.5 keeps one window queue across the channels
+  # (a recording shorter than the window gives an empty output, which tflite_runtime's get_tensor cannot read)
+  for name, n, ch, win, stride in [("64_1", 64, 1, 16, 8), ("odd_window", 50, 1, 12, 5),
+                                   ("2ch_whole", 16, 2, 16, 16), ("2ch_shifted", 64, 2, 16, 8), ("3ch_odd", 40, 3, 7, 3)]:
+    for sq in [True, False]:
+      c(f"CUSTOM_AudioSpectrogram_{name}_{int(sq)}", "CUSTOM:AudioSpectrogram", [T([n, ch], gen=("uniform", -1, 1))], [T([])],
+        custom=flex({"window_size": win, "stride": stride, "magnitude_squared": sq}))
+  # Mfcc: a squared-magnitude spectrogram [channels, frames, bins] and the sample rate
+  rate = lambda r: T([1], "int32", value=np.array([r], "int32"))
+  for name, bins, r, opts in [("default", 257, 16000, (4000, 20, 40, 13)), ("small", 33, 8000, (3000, 100, 12, 6)),
+                              ("over_nyquist", 129, 16000, (9000, 20, 20, 10)), ("dct_too_many", 65, 16000, (4000, 20, 8, 13)),
+                              ("bad_rate", 65, 0, (4000, 20, 20, 13))]:
+    up, low, banks, dct = opts
+    c(f"CUSTOM_Mfcc_{name}", "CUSTOM:Mfcc", [T([2, 3, bins], gen=("uniform", 0, 20)), rate(r)], [T([])],
+      custom=flex({"upper_frequency_limit": up, "lower_frequency_limit": low, "filterbank_channel_count": banks, "dct_coefficient_count": dct}))
+  # NumericVerify: dequantized input minus the float reference
+  nv = lambda tol, log: flex({"tolerance": tol, "log_if_failed": log})
+  for dt in ["uint8", "int8", "int16", "float16"]:
+    q = None if dt == "float16" else Q[dt]
+    c(f"CUSTOM_NumericVerify_{dt}", "CUSTOM:NumericVerify", [T([2, 3], dt, q), T([2, 3])], [T([])], custom=nv(0.0, False))
+  c("CUSTOM_NumericVerify_tolerance_pass", "CUSTOM:NumericVerify", [T([2, 3], "int8", Q["int8"]), T([2, 3], gen=("uniform", -0.04, 0.04))], [T([])],
+    custom=nv(1000.0, True))
+  c("CUSTOM_NumericVerify_tolerance_fail", "CUSTOM:NumericVerify", [T([2, 3], "int8", Q["int8"]), T([2, 3])], [T([])], custom=nv(0.5, True))
+  c("CUSTOM_NumericVerify_constant", "CUSTOM:NumericVerify", [T([2, 3], "int8", Q["int8"], data=const([2, 3], "int8", 900)), T([2, 3])], [T([])],
+    custom=nv(0.0, False), invokes=2)
+  return out
+
+
 def all_cases():
   return (binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases() + nn_cases()
-          + lookup_cases() + control_cases() + complex_cases() + nms_cases() + sparse_cases() + rnn_cases() + lstm_cases())
+          + lookup_cases() + control_cases() + complex_cases() + nms_cases() + sparse_cases() + rnn_cases() + lstm_cases() + custom_cases())

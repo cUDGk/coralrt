@@ -22,6 +22,59 @@ pub fn create(s: &OpSpec) -> Result<Option<Box<dyn Kernel>>> {
     }))
 }
 
+/// NumericVerify (numeric_verify.cc, a custom op of the BuiltinOpResolver): the quantized input dequantized, minus
+/// the float reference. With log_if_failed and a tolerance of 0.1 or more, a difference over tolerance * scale is an
+/// error. A constant input is worked out once and the output then kept, whatever the reference.
+pub struct NumericVerify {
+    tolerance: f32,
+    log_if_failed: bool,
+    done: bool,
+}
+
+impl NumericVerify {
+    pub fn new(custom: &[u8]) -> NumericVerify {
+        let get = |k: &str| (!custom.is_empty()).then(|| crate::flex::root(custom).get(k)).flatten();
+        NumericVerify { tolerance: get("tolerance").map_or(0.0, |r| r.as_f64() as f32), log_if_failed: get("log_if_failed").is_some_and(|r| r.as_bool()), done: false }
+    }
+}
+
+impl Kernel for NumericVerify {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        if io.n_in() != 2 || io.outs.len() != 1 {
+            return err("NumericVerify takes 2 inputs and 1 output");
+        }
+        let (i, r) = (io.input(0)?, io.input(1)?);
+        if !matches!(i.dtype, TType::U8 | TType::I8 | TType::I16 | TType::F16) || r.dtype != TType::F32 || r.elements() < i.elements() {
+            return err("NumericVerify takes a quantized (or float16) input and a float32 reference as large");
+        }
+        // 2.5 makes the output float32 whatever the model says
+        io.outs[0].dtype = TType::F32;
+        same_shape(i, &mut io.outs[0]);
+        Ok(())
+    }
+
+    fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let (i, r) = (io.input(0)?, io.input(1)?);
+        let constant = i.alloc == crate::tensor::Alloc::Constant;
+        if constant && self.done {
+            return Ok(());
+        }
+        let mut deq = Tensor { dtype: TType::F32, ..Tensor::default() };
+        deq.resize(i.shape.clone());
+        dequantize(i, &mut deq)?;
+        self.done = constant;
+        let out = io.outs[0].as_mut_slice::<f32>();
+        let max_diff = self.tolerance * i.scale();
+        for (k, (o, (&d, &x))) in out.iter_mut().zip(deq.as_slice::<f32>().iter().zip(r.as_slice::<f32>())).enumerate() {
+            *o = d - x;
+            if self.log_if_failed && self.tolerance >= 0.1 && o.abs() > max_diff {
+                return err(format!("Mismatch: {x} is quantized to element {k} as {d}, off by {} > {max_diff} (tolerance)", o.abs()));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// fake_quant.cc (reference_ops::FakeQuant): the range nudged so 0 is on the grid (NudgeQuantizationRange), then
 /// each value clamped to it and rounded to the grid (FakeQuantizeArray), all in float
 struct FakeQuant {
