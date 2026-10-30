@@ -17,6 +17,7 @@ pub fn create(s: &OpSpec) -> Result<Option<Box<dyn Kernel>>> {
         24 => Box::new(Rnn { kind: Kind::Basic, act: opt_act(s, 0)?, asymmetric: flag(1), sums: [None, None] }),
         35 => Box::new(Rnn { kind: Kind::Sequence { time_major: flag(0) }, act: opt_act(s, 1)?, asymmetric: flag(2), sums: [None, None] }),
         46 => Box::new(Rnn { kind: Kind::Bidirectional { time_major: flag(0), merge: flag(2) }, act: opt_act(s, 1)?, asymmetric: flag(3), sums: [None, None] }),
+        27 => Box::new(Svdf { rank: opt(s, 0, 0), act: opt_act(s, 1)?, asymmetric: flag(2), scales: [(0, 0); 2], sums: None, time: None }),
         _ => return Ok(None),
     }))
 }
@@ -308,5 +309,147 @@ impl Rnn {
             io.outs[1].as_mut_slice::<f32>().copy_from_slice(&bo);
         }
         Ok(())
+    }
+}
+
+/// SVDF (svdf.cc, reference_ops::Eval*SVDF): the input through the feature weights into the newest slot of each
+/// filter's memory (the state shifted by one first, flat across filters), then the memory through the time
+/// weights, summed over the rank, plus bias. Float and hybrid in float; int8 with an int16 state.
+struct Svdf {
+    rank: i32,
+    act: Act,
+    asymmetric: bool,
+    /// int8: the feature and time multipliers, from scale products worked out in float
+    scales: [(i32, i32); 2],
+    /// hybrid, asymmetric: the feature weights' row sums, once after each prepare
+    sums: Option<Vec<i32>>,
+    /// hybrid: the time weights dequantized on the first eval and kept for good (2.5 never redoes it)
+    time: Option<Vec<f32>>,
+}
+
+impl Kernel for Svdf {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let state = io.var(4)?.shape.clone();
+        let (i, wf, wt, bias) = (io.input(0)?, io.input(1)?, io.input(2)?, io.opt(3));
+        if !matches!(i.dtype, TType::F32 | TType::I8) || i.shape.len() != 2 || wf.shape.len() != 2 || wt.shape.len() != 2 {
+            return err("SVDF takes a float32 or int8 [batch, input] and 2-D weights");
+        }
+        let filters = wf.shape[0];
+        if self.rank <= 0 || filters % self.rank as usize != 0 {
+            return err("the rank must divide the number of filters");
+        }
+        let (batch, units, memory) = (i.shape[0], filters / self.rank as usize, wt.shape[1]);
+        let ok = i.shape[1] == wf.shape[1] && wt.shape[0] == filters && bias.is_none_or(|b| b.shape.first() == Some(&units)) && state == [batch, memory * filters];
+        if !ok {
+            return err("the SVDF weights, bias and state do not fit together");
+        }
+        // 2.5 picks the path by the feature weights' type and reads the rest as that path's types without checking
+        let st = io.var(4)?.dtype;
+        let b = bias.map(|b| b.dtype);
+        let fits = match (i.dtype, wf.dtype) {
+            (TType::F32, TType::F32) => wt.dtype == TType::F32 && st == TType::F32 && b.is_none_or(|b| b == TType::F32),
+            (TType::F32, TType::I8 | TType::U8) => matches!(wt.dtype, TType::I8 | TType::U8) && st == TType::F32 && b.is_none_or(|b| b == TType::F32),
+            (TType::I8, TType::I8 | TType::U8) => wt.dtype == TType::I16 && st == TType::I16 && b.is_none_or(|b| b == TType::I32) && io.outs[0].dtype == TType::I8,
+            _ => false,
+        };
+        if !fits {
+            return err("SVDF supports float32, hybrid (float32 with int8 weights) and int8 with int16 time weights and state");
+        }
+        if i.dtype == TType::I8 {
+            let st = io.var(4)?.scale();
+            let (i, wf, wt) = (io.input(0)?, io.input(1)?, io.input(2)?);
+            let o = io.outs[0].scale();
+            self.scales = [quantize_multiplier((i.scale() * wf.scale() / st) as f64), quantize_multiplier((st * wt.scale() / o) as f64)];
+        }
+        self.sums = None;
+        io.outs[0].resize(vec![batch, units]);
+        Ok(())
+    }
+
+    fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let (i, wf, wt, bias) = (io.input(0)?, io.input(1)?, io.input(2)?, io.opt(3));
+        let (batch, isz, filters, memory) = (i.shape[0], i.shape[1], wf.shape[0], wt.shape[1]);
+        let (rank, units) = (self.rank as usize, filters / self.rank as usize);
+        if i.dtype == TType::I8 {
+            if self.act != Act::Relu {
+                return err("int8 SVDF needs a RELU activation");
+            }
+            // uint8 feature weights are read as int8
+            let w: Vec<i64> = wf.data().iter().map(|&v| v as i8 as i64).collect();
+            let (x, tw) = (ints(i)?, ints(wt)?);
+            let b = bias.map(|t| t.as_slice::<i32>().to_vec());
+            let (izp, ozp) = (i.zero_point() as i64, io.outs[0].zero_point());
+            let [(m1, s1), (m2, s2)] = self.scales;
+            let st = io.var(4)?.as_mut_slice::<i16>();
+            st.copy_within(1.., 0);
+            for bb in 0..batch {
+                for r in 0..filters {
+                    let dot = (0..isz).fold(0i32, |a, c| a.wrapping_add((w[r * isz + c] * (x[bb * isz + c] - izp)) as i32));
+                    st[(bb * filters + r) * memory + memory - 1] = mul_by_quantized_multiplier(dot, m1, s1).clamp(-32768, 32767) as i16;
+                }
+            }
+            let scratch: Vec<i32> = (0..batch * filters)
+                .map(|k| {
+                    let f = k % filters;
+                    (0..memory).fold(0i32, |a, m| a.wrapping_add(tw[f * memory + m] as i32 * st[k * memory + m] as i32))
+                })
+                .collect();
+            let out: Vec<i64> = (0..batch * units)
+                .map(|o| {
+                    let mut v = scratch[o * rank..(o + 1) * rank].iter().fold(0i32, |a, &s| a.wrapping_add(s));
+                    v = v.wrapping_add(b.as_ref().map_or(0, |b| b[o % units]));
+                    mul_by_quantized_multiplier(v, m2, s2).wrapping_add(ozp).clamp(-128, 127) as i64
+                })
+                .collect();
+            return put_ints(&mut io.outs[0], &out);
+        }
+        let x = i.as_slice::<f32>();
+        // the time weights in float (hybrid: their int8 bytes times their scale)
+        let tw: Vec<f32> = if wt.dtype == TType::F32 {
+            wt.as_slice::<f32>().to_vec()
+        } else {
+            self.time.get_or_insert_with(|| wt.data().iter().map(|&v| v as i8 as f32 * wt.scale()).collect()).clone()
+        };
+        let mut scratch = vec![0.0f32; batch * filters];
+        if wf.dtype == TType::F32 {
+            let w = wf.as_slice::<f32>();
+            for bb in 0..batch {
+                mbvma_f32(w, filters, isz, &x[bb * isz..], &mut scratch[bb * filters..(bb + 1) * filters]);
+            }
+        } else if !is_zero(&x[..batch * isz]) {
+            let w: Vec<i32> = wf.data().iter().map(|&v| v as i8 as i32).collect();
+            if self.asymmetric && self.sums.is_none() {
+                self.sums = Some(row_sums(&w, isz));
+            }
+            let (q, sc, zp) = batch_quantize(&x[..batch * isz], isz, self.asymmetric);
+            for bb in 0..batch {
+                let offset = self.sums.as_ref().filter(|_| self.asymmetric).map(|r| (r.as_slice(), zp[bb]));
+                mbvma_i8(&w, filters, isz, &q[bb * isz..], sc[bb] * wf.scale(), offset, &mut scratch[bb * filters..(bb + 1) * filters]);
+            }
+        }
+        let b = bias.map(|t| t.as_slice::<f32>().to_vec());
+        let st = io.var(4)?.as_mut_slice::<f32>();
+        st.copy_within(1.., 0);
+        for (k, &v) in scratch.iter().enumerate() {
+            st[k * memory + memory - 1] = v;
+        }
+        // ApplyTimeWeightsBiasAndActivation
+        for (k, s) in scratch.iter_mut().enumerate() {
+            let f = k % filters;
+            *s = (0..memory).fold(0.0f32, |a, m| a + tw[f * memory + m] * st[k * memory + m]);
+        }
+        let out = io.outs[0].as_mut_slice::<f32>();
+        for (o, d) in out.iter_mut().enumerate() {
+            *d = scratch[o * rank..(o + 1) * rank].iter().fold(0.0f32, |a, &s| a + s);
+            if let Some(b) = &b {
+                *d += b[o % units];
+            }
+        }
+        apply_activation(out, self.act);
+        Ok(())
+    }
+
+    fn mutated_inputs(&self) -> &[usize] {
+        &[4]
     }
 }

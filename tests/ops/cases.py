@@ -713,6 +713,23 @@ def rnn_cases():
             ba = T([5, 3], data=const([5, 3], "float32", 541)) if wt == "float32" else T([5, 3], wt, (0.01, 0), data=const([5, 3], wt, 541))
             c(f"BIDIRECTIONAL_SEQUENCE_RNN_{tag}_{int(tm)}_aux", "BIDIRECTIONAL_SEQUENCE_RNN", base + [T(aux_shape), fa, ba], outs, opts, invokes=2)
             c(f"BIDIRECTIONAL_SEQUENCE_RNN_{tag}_{int(tm)}_nonstacking", "BIDIRECTIONAL_SEQUENCE_RNN", base + [T(shape), None, None], outs, opts, invokes=2)
+  # SVDF: 6 filters over an input of 5, a memory of 4; more invokes than the memory so old slots fall out
+  svdf = lambda rank, act, asym=False: ("SVDFOptions", {"rank": rank, "fusedActivationFunction": ACT[act], "asymmetricQuantizeInputs": asym})
+  for rank in [1, 2]:
+    units = 6 // rank
+    for act in ["NONE", "RELU", "TANH"]:
+      c(f"SVDF_float32_{rank}_{act}", "SVDF", [T([2, 5]), T([6, 5], data=const([6, 5], "float32", 550)), T([6, 4], data=const([6, 4], "float32", 551)),
+                                               T([units], data=const([units], "float32", 552)), T([2, 24], var=True)], [T([])], svdf(rank, act), invokes=6)
+    for wt in ["int8", "uint8"]:
+      for asym in [False, True]:
+        c(f"SVDF_{wt}_{int(asym)}_{rank}", "SVDF", [T([2, 5]), T([6, 5], wt, (0.01, 0), data=const([6, 5], wt, 553)), T([6, 4], wt, (0.008, 0), data=const([6, 4], wt, 554)),
+                                                    T([units], data=const([units], "float32", 555)), T([2, 24], var=True)], [T([])], svdf(rank, "TANH", asym), invokes=6)
+    for wt in ["int8", "uint8"]:
+      for bias in [True, False]:
+        b = T([units], "int32", data=const([units], "int32", 558, -5000, 5000)) if bias else None
+        c(f"SVDF_int8_{wt}_{rank}_{int(bias)}", "SVDF", [T([2, 5], "int8", (0.05, -3)), T([6, 5], wt, (0.01, 0), data=const([6, 5], wt, 556)),
+                                                         T([6, 4], "int16", (0.0005, 0), data=const([6, 4], "int16", 557, -3000, 3000)), b,
+                                                         T([2, 24], "int16", (0.002, 0), var=True)], [T([], "int8", (0.5, 4))], svdf(rank, "RELU"), invokes=6)
   return out
 
 
