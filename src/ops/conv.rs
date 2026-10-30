@@ -30,6 +30,13 @@ pub fn create(s: &OpSpec) -> Result<Option<Box<dyn Kernel>>> {
             quant: Quant::default(),
         }),
         67 => Box::new(TransposeConv { padding: opt_padding(s, 0)?, stride: (opt(s, 2, 0), opt(s, 1, 0)), quant: Quant::default() }),
+        132 => Box::new(Conv3D {
+            padding: opt_padding(s, 0)?,
+            stride: [opt(s, 1, 0), opt(s, 3, 0), opt(s, 2, 0)],
+            act: opt_act(s, 4)?,
+            dilation: [opt(s, 5, 1), opt(s, 7, 1), opt(s, 6, 1)],
+            pad: [0; 3],
+        }),
         _ => return Ok(None),
     }))
 }
@@ -549,6 +556,86 @@ impl Kernel for TransposeConv {
             })
             .collect();
         put_ints(o, &res)
+    }
+}
+
+/// conv3d.cc: float only, input NDHWC, filter DHWIO, optional bias. 2.5 runs im2col + Eigen's GEMM, so this sums in
+/// double and matches within rounding. (depth, height, width) triples.
+struct Conv3D {
+    padding: Padding,
+    stride: [i32; 3],
+    act: Act,
+    dilation: [i32; 3],
+    pad: [i32; 3],
+}
+
+impl Kernel for Conv3D {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let (i, f, bias) = (io.input(0)?, io.input(1)?, io.opt(2));
+        if i.shape.len() != 5 || f.shape.len() != 5 || i.shape[4] != f.shape[3] {
+            return err("CONV_3D takes a 5-D input and a 5-D filter of the input's channels");
+        }
+        if i.dtype != TType::F32 || f.dtype != TType::F32 || io.outs[0].dtype != TType::F32 {
+            return err("CONV_3D takes float32");
+        }
+        if bias.is_some_and(|b| b.dtype != TType::F32 || b.elements() != f.shape[4]) {
+            return err("the bias needs one float per output channel");
+        }
+        let mut out = vec![i.shape[0]];
+        for d in 0..3 {
+            let (o, p, _) = out_size_and_pad(self.padding, i.shape[1 + d] as i32, f.shape[d] as i32, self.stride[d], self.dilation[d]);
+            if o < 0 {
+                return err("the filter is larger than the input");
+            }
+            out.push(o as usize);
+            self.pad[d] = p;
+        }
+        out.push(f.shape[4]);
+        io.outs[0].resize(out);
+        Ok(())
+    }
+
+    fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let (i, f, bias) = (io.input(0)?, io.input(1)?, io.opt(2));
+        let o = &mut io.outs[0];
+        let (x, w) = (i.as_slice::<f32>(), f.as_slice::<f32>());
+        let b = bias.map(|t| t.as_slice::<f32>());
+        let (is, fs, os) = (i.shape.clone(), f.shape.clone(), o.shape.clone());
+        let (ic, oc) = (is[4], os[4]);
+        let (lo, hi) = act_range_f(self.act);
+        let v = o.as_mut_slice::<f32>();
+        let mut at = 0;
+        for bb in 0..os[0] {
+            for od in 0..os[1] {
+                for oh in 0..os[2] {
+                    for ow in 0..os[3] {
+                        for c in 0..oc {
+                            let mut acc = 0.0f64;
+                            for fd in 0..fs[0] {
+                                let zd = (od as i32) * self.stride[0] - self.pad[0] + self.dilation[0] * fd as i32;
+                                for fh in 0..fs[1] {
+                                    let zh = (oh as i32) * self.stride[1] - self.pad[1] + self.dilation[1] * fh as i32;
+                                    for fw in 0..fs[2] {
+                                        let zw = (ow as i32) * self.stride[2] - self.pad[2] + self.dilation[2] * fw as i32;
+                                        if zd < 0 || zd >= is[1] as i32 || zh < 0 || zh >= is[2] as i32 || zw < 0 || zw >= is[3] as i32 {
+                                            continue;
+                                        }
+                                        let xb = (((bb * is[1] + zd as usize) * is[2] + zh as usize) * is[3] + zw as usize) * ic;
+                                        let wb = ((fd * fs[1] + fh) * fs[2] + fw) * ic * oc;
+                                        for k in 0..ic {
+                                            acc += x[xb + k] as f64 * w[wb + k * oc + c] as f64;
+                                        }
+                                    }
+                                }
+                            }
+                            v[at] = clamp_f(acc as f32 + b.map_or(0.0, |b| b[c]), lo, hi);
+                            at += 1;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 

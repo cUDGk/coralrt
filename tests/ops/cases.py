@@ -530,6 +530,15 @@ def conv_cases():
     [T([])], tco("SAME", (2, 2)), tol=1e-5)
   c("TRANSPOSE_CONV_shape_input", "TRANSPOSE_CONV", [T([4], "int32", value=[1, 6, 6, 2]), T([2, 3, 3, 2], data=const([2, 3, 3, 2], "float32", 351)), T([1, 3, 3, 2])],
     [T([])], tco("SAME", (2, 2)), tol=1e-5)
+  c3o = lambda pad, s, d, act="NONE": ("Conv3DOptions", {"padding": PAD[pad], "strideD": s[0], "strideH": s[1], "strideW": s[2], "fusedActivationFunction": ACT[act],
+                                                         "dilationDFactor": d[0], "dilationHFactor": d[1], "dilationWFactor": d[2]})
+  # (input NDHWC, filter (depth, height, width, out channels), stride, dilation, padding)
+  for k, (shape, (fd, fh, fw, oc), s, d, pad, act) in enumerate([([1, 4, 5, 5, 2], (2, 3, 3, 3), (1, 1, 1), (1, 1, 1), "SAME", "NONE"),
+                                                                 ([2, 5, 4, 6, 3], (3, 2, 2, 2), (2, 1, 2), (1, 1, 1), "VALID", "RELU"),
+                                                                 ([1, 6, 6, 6, 1], (2, 2, 2, 4), (1, 1, 1), (2, 2, 1), "SAME", "RELU6")]):
+    fs = [fd, fh, fw, shape[4], oc]
+    c(f"CONV_3D_f32_{k}", "CONV_3D", [T(shape), T(fs, data=const(fs, "float32", 360 + k)), T([oc], data=const([oc], "float32", 370 + k))], [T([])], c3o(pad, s, d, act), tol=1e-5)
+  c("CONV_3D_f32_nobias", "CONV_3D", [T([1, 3, 4, 4, 2]), T([2, 2, 2, 2, 3], data=const([2, 2, 2, 2, 3], "float32", 380))], [T([])], c3o("VALID", (1, 1, 1), (1, 1, 1)), tol=1e-5)
   # halves everywhere: the GEMM's rounding shows
   fs = [8, 3, 3, 8]
   for dt, zp in [("uint8", 128), ("int8", 0)]:
