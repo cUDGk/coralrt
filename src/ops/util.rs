@@ -45,12 +45,7 @@ pub fn srdhm(a: i32, b: i32) -> i32 {
     ((ab + nudge) / (1i64 << 31)) as i32
 }
 
-pub fn rounding_divide_by_pot(x: i32, e: i32) -> i32 {
-    let mask = ((1i64 << e) - 1) as i32;
-    let rem = x & mask;
-    let threshold = (mask >> 1) + (x < 0) as i32;
-    (x >> e) + (rem > threshold) as i32
-}
+pub use super::fixedpoint::rounding_divide_by_pot;
 
 pub fn mul_smaller_than_one_exp(x: i32, m: i32, left_shift: i32) -> i32 {
     rounding_divide_by_pot(srdhm(x, m), -left_shift)

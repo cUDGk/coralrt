@@ -87,7 +87,7 @@ pub trait Elem: Copy + Default + Send + 'static {
 macro_rules! elem {
     ($($t:ty => $($tt:ident)|+),*) => {$(impl Elem for $t { const TYPES: &'static [TType] = &[$(TType::$tt),+]; })*};
 }
-elem!(f32 => F32, f64 => F64, i8 => I8, u8 => U8 | Bool, i16 => I16, u16 => F16, i32 => I32 | Resource, u32 => U32, i64 => I64, u64 => U64);
+elem!(f32 => F32 | C64, f64 => F64 | C128, i8 => I8, u8 => U8 | Bool, i16 => I16, u16 => F16, i32 => I32 | Resource, u32 => U32, i64 => I64, u64 => U64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Alloc {

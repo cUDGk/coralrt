@@ -52,6 +52,12 @@ fn quantize(i: &Tensor, o: &mut Tensor) -> Result<()> {
 }
 
 fn dequantize(i: &Tensor, o: &mut Tensor) -> Result<()> {
+    if i.dtype == TType::F16 && o.dtype == TType::F32 {
+        for (d, &h) in o.as_mut_slice::<f32>().iter_mut().zip(i.as_slice::<u16>()) {
+            *d = f16_to_f32(h);
+        }
+        return Ok(());
+    }
     if !matches!(i.dtype, TType::U8 | TType::I8 | TType::I16) || o.dtype != TType::F32 {
         return err(format!("{:?} -> {:?} is not supported", i.dtype, o.dtype));
     }
@@ -61,10 +67,40 @@ fn dequantize(i: &Tensor, o: &mut Tensor) -> Result<()> {
     Ok(())
 }
 
-/// static_cast of every element
+/// float -> int as x86 converts (cvttss2si / cvttsd2si): truncated, the type's minimum when out of range or NaN.
+/// static_cast leaves that undefined; narrower integers go through the 32-bit conversion.
+fn cvtt(x: f64, bits64: bool) -> i64 {
+    let lim = if bits64 { 9223372036854775808.0 } else { 2147483648.0 };
+    if x.is_nan() || x >= lim || x < -lim {
+        if bits64 { i64::MIN } else { i32::MIN as i64 }
+    } else {
+        x as i64
+    }
+}
+
+/// cast.cc: static_cast of every element; a complex value casts its real part, a cast to complex has no imaginary one
 fn cast(i: &Tensor, o: &mut Tensor) -> Result<()> {
-    match i.dtype {
-        TType::F32 | TType::F64 | TType::F16 => put_f64s(o, &f64s(i)?),
+    if i.dtype == TType::C64 && o.dtype == TType::C64 {
+        o.as_mut_slice::<f32>().copy_from_slice(i.as_slice::<f32>());
+        return Ok(());
+    }
+    let float_in = matches!(i.dtype, TType::F32 | TType::F64 | TType::F16 | TType::C64);
+    let reals: Vec<f64> = match i.dtype {
+        TType::C64 => i.as_slice::<f32>().iter().step_by(2).map(|&x| x as f64).collect(),
+        _ if float_in => f64s(i)?,
+        _ => Vec::new(),
+    };
+    match o.dtype {
+        TType::C64 => {
+            let v = if float_in { reals } else { ints(i)?.into_iter().map(|x| x as f32 as f64).collect() };
+            for (d, x) in o.as_mut_slice::<f32>().chunks_exact_mut(2).zip(v) {
+                d[0] = x as f32;
+                d[1] = 0.0;
+            }
+            Ok(())
+        }
+        TType::F32 | TType::F64 | TType::F16 | TType::Bool if float_in => put_f64s(o, &reals),
+        t if float_in => put_ints(o, &reals.iter().map(|&x| cvtt(x, matches!(t, TType::I64 | TType::U64))).collect::<Vec<_>>()),
         _ => put_ints(o, &ints(i)?),
     }
 }

@@ -20,6 +20,7 @@ import cases  # noqa: E402
 
 NAMES = {np.dtype(k): k for k in ["float32", "float16", "float64", "int8", "uint8", "int16", "int32", "int64", "uint32", "uint64",
                                  "bool", "complex64", "complex128"]}
+TAB, NL = "\t", "\n"
 
 
 def dtype_name(d):
@@ -40,7 +41,7 @@ def record(case, models, oracle):
   try:
     it = Interpreter(model_path=path)
   except Exception as e:
-    return "	".join([case.name, "load_error", str(case.tol), str(case.invokes), "", "", str(e).splitlines()[0][:200]])
+    return TAB.join([case.name, "load_error", str(case.tol), str(case.invokes), "", "", str(e).splitlines()[0][:200]])
   try:
     details = it.get_input_details()
     for d, t in zip(details, ins):
@@ -66,7 +67,7 @@ def record(case, models, oracle):
         out_desc.append(fmt(np.shape(v), name))
   except Exception as e:
     status, msg = "run_error", (str(e).strip().splitlines() or [type(e).__name__])[-1][:200]
-  return "	".join([case.name, status, str(case.tol), str(case.invokes), ";".join(in_desc), ";".join(out_desc), msg])
+  return TAB.join([case.name, status, str(case.tol), str(case.invokes), ";".join(in_desc), ";".join(out_desc), msg])
 
 
 def worker(out, names):
@@ -85,12 +86,12 @@ def main():
   oracle = os.path.join(out, "oracle")
   os.makedirs(oracle, exist_ok=True)
   prefixes = sys.argv[2:]
-  todo = [c.name for c in cases.all_cases() if not prefixes or any(c.name.startswith(p) for p in prefixes)]
+  all_cases = cases.all_cases()
+  todo = [c.name for c in all_cases if not prefixes or any(c.name.startswith(p) for p in prefixes)]
   lines = []
   while todo:
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
-      f.write("
-".join(todo))
+      f.write(NL.join(todo))
     run = subprocess.run([sys.executable, "-I", os.path.abspath(__file__), "--worker", out, f.name], capture_output=True, text=True)
     os.unlink(f.name)
     started = None
@@ -100,28 +101,24 @@ def main():
       elif l.startswith("line "):
         lines.append(l[5:])
         started = None
-    done = {l.split("	")[0] for l in lines}
+    done = {l.split(TAB)[0] for l in lines}
     if started is not None:
-      case = next(c for c in cases.all_cases() if c.name == started)
-      lines.append("	".join([started, "run_error", str(case.tol), str(case.invokes), "", "", f"tflite 2.5 crashed (exit {run.returncode})"]))
+      case = next(c for c in all_cases if c.name == started)
+      lines.append(TAB.join([started, "run_error", str(case.tol), str(case.invokes), "", "", f"tflite 2.5 crashed (exit {run.returncode})"]))
       done.add(started)
     elif run.returncode != 0:
       raise RuntimeError(run.stderr[-2000:])
     todo = [n for n in todo if n not in done]
-  with open(os.path.join(oracle, "manifest.txt"), "w", encoding="utf-8", newline="
-") as f:
-    f.write("
-".join(lines) + "
-")
+  with open(os.path.join(oracle, "manifest.txt"), "w", encoding="utf-8", newline=NL) as f:
+    f.write(NL.join(lines) + NL)
   counts = {}
   for l in lines:
-    counts[l.split("	")[1]] = counts.get(l.split("	")[1], 0) + 1
+    counts[l.split(TAB)[1]] = counts.get(l.split(TAB)[1], 0) + 1
   print(f"{len(lines)} cases: {counts}")
 
 
 if __name__ == "__main__":
   if sys.argv[1] == "--worker":
-    worker(sys.argv[2], open(sys.argv[3]).read().split("
-"))
+    worker(sys.argv[2], open(sys.argv[3]).read().split(NL))
   else:
     main()

@@ -3,6 +3,7 @@
 //! float/double mix and its orderings. Integer and quantized ops match it byte for byte; float ops whose result
 //! depends on the summation order of an optimized kernel (convolutions, matrix products) match it within rounding.
 
+pub mod fixedpoint;
 pub mod util;
 
 mod binary;

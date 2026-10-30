@@ -1,5 +1,6 @@
 //! Elementwise ops on two broadcast inputs.
 
+use super::fixedpoint as fp;
 use super::util::*;
 use super::{Io, Kernel};
 use crate::interp::Env;
@@ -100,6 +101,38 @@ impl Kernel for Arith {
                     };
                     v[i] = clamp_f(r, lo, hi);
                 })?;
+            }
+            (TType::U8, ArithOp::Div) => {
+                // reference_ops::Div (div.h): the divisor's reciprocal in fixed point, then the output's multiplier
+                // (div.cc Prepare works it out in float, then widens it)
+                let (m, shift) = quantize_multiplier((a.scale() / (b.scale() * o.scale())) as f64);
+                let (off1, off2, offo) = (-a.zero_point(), -b.zero_point(), o.zero_point());
+                let (lo, hi) = act_range_q(self.act, o);
+                let (da, db, od) = (a.data(), b.data(), o.data_mut());
+                broadcast(&so, sa, sb, |i, ia, ib| {
+                    let (x, y) = (off1 + da[ia] as i32, off2 + db[ib] as i32);
+                    let (inv, recip_shift) = if y > 0 {
+                        fp::reciprocal(y, 31)
+                    } else {
+                        let (r, s) = fp::reciprocal(y.wrapping_neg(), 31);
+                        (r.wrapping_neg(), s)
+                    };
+                    let headroom = fp::clsb(x);
+                    let unscaled = srdhm(x.wrapping_mul(1i32.wrapping_shl(headroom as u32)), inv);
+                    let total_shift = shift - recip_shift - headroom;
+                    let v = offo.wrapping_add(fp::rounding_divide_by_pot(srdhm(unscaled, m), -total_shift));
+                    od[i] = v.clamp(lo, hi) as u8;
+                })?;
+            }
+            (TType::I32, ArithOp::Div) => {
+                let (lo, hi) = act_range_f(self.act);
+                let (lo, hi) = (if self.act == Act::None { i32::MIN } else { lo as i32 }, if hi == f32::MAX { i32::MAX } else { hi as i32 });
+                let (xa, xb) = (a.as_slice::<i32>(), b.as_slice::<i32>());
+                if xb.contains(&0) {
+                    return err("division by 0");
+                }
+                let v = o.as_mut_slice::<i32>();
+                broadcast(&so, sa, sb, |i, ia, ib| v[i] = xa[ia].wrapping_div(xb[ib]).clamp(lo, hi))?;
             }
             (TType::I32 | TType::I64, op) if op != ArithOp::Div => {
                 let (lo, hi) = act_range_f(self.act);

@@ -226,11 +226,10 @@ impl Kernel for GatherNd {
     fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
         let (p, idx) = (io.input(0)?, io.input(1)?);
         let o = &mut io.outs[0];
-        let es = p.dtype.size();
         let nd = Self::check(p, idx)?;
         let pshape = &p.shape;
         let slices: usize = idx.shape[..idx.shape.len() - 1].iter().product();
-        let slice: usize = pshape[nd..].iter().product::<usize>() * es;
+        let slice: usize = pshape[nd..].iter().product::<usize>();
         let mut dims_to_count = vec![0; nd];
         let mut remain: usize = pshape.iter().product();
         for (j, c) in dims_to_count.iter_mut().enumerate() {
@@ -238,6 +237,8 @@ impl Kernel for GatherNd {
             remain = *c;
         }
         let indices = ints(idx)?;
+        // the first element of each slice
+        let mut starts = Vec::with_capacity(slices);
         for s in 0..slices {
             let mut from = 0;
             for j in 0..nd {
@@ -247,7 +248,18 @@ impl Kernel for GatherNd {
                 }
                 from += v as usize * dims_to_count[j];
             }
-            o.data_mut()[s * slice..(s + 1) * slice].copy_from_slice(&p.data()[from * es..from * es + slice]);
+            starts.push(from);
+        }
+        if p.dtype == TType::Str {
+            let src = p.strings()?;
+            let picked: Vec<&[u8]> = starts.iter().flat_map(|&s| src[s..s + slice].iter().copied()).collect();
+            let shape = o.shape.clone();
+            o.set_strings(&picked, shape);
+            return Ok(());
+        }
+        let (es, d) = (p.dtype.size(), p.data());
+        for (s, &from) in starts.iter().enumerate() {
+            o.data_mut()[s * slice * es..(s + 1) * slice * es].copy_from_slice(&d[from * es..(from + slice) * es]);
         }
         Ok(())
     }
