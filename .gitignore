@@ -5,3 +5,5 @@ python/coralrt/*.so
 python/coralrt/*.dylib
 python/*.egg-info/
 __pycache__/
+python/build/
+python/dist/
