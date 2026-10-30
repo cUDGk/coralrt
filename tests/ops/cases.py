@@ -120,6 +120,79 @@ def shape_cases():
   return out
 
 
+def movement_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  i32 = lambda shape, v, const=True: T(shape, "int32", data=v) if const else T(shape, "int32", value=v)
+  for dt in ["float32", "uint8", "int8", "int16", "int32", "int64", "bool"]:
+    q = Q.get(dt)
+    c(f"SQUEEZE_{dt}", "SQUEEZE", [T([1, 3, 1, 4], dt, q)], [T([], dt, q)], ("SqueezeOptions", {"squeezeDims": []}))
+    c(f"SQUEEZE_{dt}_axis", "SQUEEZE", [T([1, 3, 1, 4], dt, q)], [T([], dt, q)], ("SqueezeOptions", {"squeezeDims": [-2]}))
+    c(f"EXPAND_DIMS_{dt}", "EXPAND_DIMS", [T([3, 4], dt, q), i32([1], [-1])], [T([], dt, q)])
+    c(f"TRANSPOSE_{dt}", "TRANSPOSE", [T([2, 3, 4], dt, q), i32([3], [2, 0, 1])], [T([], dt, q)])
+    c(f"TRANSPOSE_{dt}_5d", "TRANSPOSE", [T([2, 1, 3, 2, 2], dt, q), i32([5], [4, 2, 0, 3, 1])], [T([], dt, q)])
+    c(f"SLICE_{dt}", "SLICE", [T([3, 4, 5], dt, q), i32([3], [1, 0, 2]), i32([3], [2, -1, 2])], [T([], dt, q)])
+    c(f"REVERSE_V2_{dt}", "REVERSE_V2", [T([3, 4, 2], dt, q), i32([1], [1])], [T([], dt, q)])
+    c(f"TILE_{dt}", "TILE", [T([2, 3], dt, q), i32([2], [2, 3])], [T([], dt, q)])
+    c(f"GATHER_{dt}", "GATHER", [T([4, 3, 2], dt, q), i32([2, 2], [[2, 0], [1, 1]], False)], [T([], dt, q)], ("GatherOptions", {"axis": 1 if dt != "bool" else 0, "batchDims": 0}))
+    c(f"BROADCAST_TO_{dt}", "BROADCAST_TO", [T([3, 1], dt, q), i32([3], [2, 3, 4])], [T([], dt, q)], version=2)
+  for dt in ["float32", "uint8", "int8", "int32", "int64"]:
+    q = Q.get(dt)
+    c(f"PAD_{dt}", "PAD", [T([2, 3], dt, q), i32([2, 2], [[1, 0], [2, 1]])], [T([], dt, q)])
+    c(f"PADV2_{dt}", "PADV2", [T([2, 3], dt, q), i32([2, 2], [[0, 2], [1, 1]]), T([], dt, q, data=7)], [T([], dt, q)])
+    for mode in [0, 1]:
+      c(f"MIRROR_PAD_{dt}_{mode}", "MIRROR_PAD", [T([3, 4], dt, q), i32([2, 2], [[2, 1], [1, 3 - mode]])], [T([], dt, q)], ("MirrorPadOptions", {"mode": mode}))
+    c(f"SPACE_TO_DEPTH_{dt}", "SPACE_TO_DEPTH", [T([1, 4, 6, 3], dt, q)], [T([], dt, q)], ("SpaceToDepthOptions", {"blockSize": 2}))
+    c(f"DEPTH_TO_SPACE_{dt}", "DEPTH_TO_SPACE", [T([1, 2, 3, 8], dt, q)], [T([], dt, q)], ("DepthToSpaceOptions", {"blockSize": 2}))
+    c(f"SPACE_TO_BATCH_ND_{dt}", "SPACE_TO_BATCH_ND", [T([2, 3, 4, 2], dt, q), i32([2], [2, 3]), i32([2, 2], [[1, 0], [1, 1]])], [T([], dt, q)])
+    c(f"BATCH_TO_SPACE_ND_{dt}", "BATCH_TO_SPACE_ND", [T([12, 2, 2, 2], dt, q), i32([2], [2, 3]), i32([2, 2], [[1, 0], [0, 2]])], [T([], dt, q)])
+    c(f"SPLIT_{dt}", "SPLIT", [i32([], 1), T([2, 6, 3], dt, q)], [T([], dt, q) for _ in range(3)], ("SplitOptions", {"numSplits": 3}))
+    c(f"SPLIT_V_{dt}", "SPLIT_V", [T([2, 7, 3], dt, q), i32([3], [2, -1, 1]), i32([], 1)], [T([], dt, q) for _ in range(3)], ("SplitVOptions", {"numSplits": 3}))
+    c(f"MATRIX_DIAG_{dt}", "MATRIX_DIAG", [T([2, 3], dt, q)], [T([], dt, q)])
+    c(f"MATRIX_SET_DIAG_{dt}", "MATRIX_SET_DIAG", [T([2, 3, 4], dt, q), T([2, 3], dt, q)], [T([], dt, q)])
+    c(f"REVERSE_SEQUENCE_{dt}", "REVERSE_SEQUENCE", [T([3, 5, 2], dt, q), T([3], "int32", value=[2, 5, 0])], [T([], dt, q)], ("ReverseSequenceOptions", {"seqDim": 1, "batchDim": 0}))
+    c(f"SCATTER_ND_{dt}", "SCATTER_ND", [T([3, 1], "int32", value=[[2], [0], [2]]), T([3, 4], dt, q, gen=("int", 0, 20) if dt != "float32" else None), i32([2], [4, 4])], [T([], dt, q)])
+    c(f"UNIQUE_{dt}", "UNIQUE", [T([12], dt, q, gen=("int", 0, 4) if dt != "float32" else ("choice", [1.0, -0.0, 0.0, 2.5, 1.0]))], [T([], dt, q), T([], "int32")], ("UniqueOptions", {"idxOutType": TT["int32"]}))
+    c(f"SELECT_{dt}", "SELECT", [T([2, 3], "bool"), T([2, 3], dt, q), T([2, 3], dt, q)], [T([], dt, q)])
+    c(f"SELECT_{dt}_rank1", "SELECT", [T([2], "bool"), T([2, 3], dt, q), T([2, 3], dt, q)], [T([], dt, q)])
+    c(f"SELECT_V2_{dt}", "SELECT_V2", [T([2, 1], "bool"), T([1, 3], dt, q), T([2, 3], dt, q)], [T([], dt, q)])
+    c(f"ONE_HOT_{dt}", "ONE_HOT", [T([2, 3], "int32", gen=("int", -1, 4)), i32([], 4), T([], dt, q, data=5), T([], dt, q, data=1)], [T([], dt, q)], ("OneHotOptions", {"axis": 1}))
+    c(f"SPARSE_TO_DENSE_{dt}", "SPARSE_TO_DENSE", [i32([3, 2], [[0, 1], [1, 2], [2, 0]]), i32([2], [3, 4]), T([3], dt, q, value=[1, 2, 3]), T([], dt, q, data=9)], [T([], dt, q)],
+      ("SparseToDenseOptions", {"validateIndices": True}))
+    c(f"FILL_{dt}", "FILL", [i32([2], [2, 3]), T([], dt, q, data=4)], [T([], dt, q)])
+  for k, (b, e, s, masks) in enumerate([([1, 0, 0], [3, 4, 5], [1, 2, 1], (0, 0, 0)), ([0, 3, -1], [3, 0, 0], [1, -1, -2], (0, 0, 0)),
+                                         ([1, 1, 1], [2, 3, 4], [1, 1, 1], (5, 2, 0)), ([1, 0, 2], [2, 4, 3], [1, 1, 1], (0, 0, 5)),
+                                         ([-2, 0], [-1, 0], [1, 1], (0, 2, 1)), ([0], [2], [1], (0, 0, 0))]):
+    for dt in ["float32", "int8", "int32"]:
+      c(f"STRIDED_SLICE_{dt}_{k}", "STRIDED_SLICE", [T([3, 4, 5], dt, Q.get(dt)), i32([len(b)], b), i32([len(e)], e), i32([len(s)], s)], [T([], dt, Q.get(dt))],
+        ("StridedSliceOptions", {"beginMask": masks[0], "endMask": masks[1], "shrinkAxisMask": masks[2], "ellipsisMask": 0, "newAxisMask": 0}))
+  c("STRIDED_SLICE_string", "STRIDED_SLICE", [T([4, 3], "string"), i32([2], [1, 0]), i32([2], [4, 3]), i32([2], [2, 2])], [T([], "string")],
+    ("StridedSliceOptions", {"beginMask": 0, "endMask": 0, "shrinkAxisMask": 0, "ellipsisMask": 0, "newAxisMask": 0}))
+  c("SLICE_string", "SLICE", [T([3, 4], "string"), i32([2], [1, 1]), i32([2], [2, 2])], [T([], "string")])
+  c("TILE_string", "TILE", [T([2], "string"), i32([1], [3])], [T([], "string")])
+  c("GATHER_string", "GATHER", [T([5], "string"), i32([3], [4, 0, 4], False)], [T([], "string")], ("GatherOptions", {"axis": 0, "batchDims": 0}))
+  c("FILL_string", "FILL", [i32([1], [3]), T([], "string", data=b"ab")], [T([], "string")])
+  c("GATHER_batch", "GATHER", [T([2, 4, 3]), i32([2, 2], [[0, 3], [1, 1]], False)], [T([])], ("GatherOptions", {"axis": 1, "batchDims": 1}))
+  c("GATHER_int64_idx", "GATHER", [T([4, 3]), T([2], "int64", value=[3, 0])], [T([])], ("GatherOptions", {"axis": 0, "batchDims": 0}))
+  # shapes from non-constant inputs: sized while running
+  c("RESHAPE_like_SLICE_dynamic", "SLICE", [T([3, 4]), i32([2], [1, 1], False), i32([2], [2, -1], False)], [T([])])
+  c("TRANSPOSE_dynamic", "TRANSPOSE", [T([2, 3]), i32([2], [1, 0], False)], [T([])])
+  c("PAD_dynamic", "PAD", [T([2, 2]), i32([2, 2], [[1, 1], [0, 2]], False)], [T([])])
+  c("FILL_dynamic", "FILL", [i32([3], [2, 1, 3], False), T([], value=2.5)], [T([])])
+  for dt in ["float32", "int32"]:
+    c(f"RANGE_{dt}", "RANGE", [T([], dt, data=1), T([], dt, data=10), T([], dt, data=3 if dt == "int32" else 0.7)], [T([], dt)])
+    c(f"RANGE_{dt}_neg", "RANGE", [T([], dt, value=5), T([], dt, value=-3), T([], dt, value=-2 if dt == "int32" else -0.3)], [T([], dt)])
+    c(f"ADD_N_{dt}", "ADD_N", [T([3, 4], dt), T([3, 4], dt), T([3, 4], dt)], [T([], dt)])
+  c("ADD_N_f32_zero", "ADD_N", [T([4], value=[-0.0, 0.0, -1.0, 2.0]), T([4], value=[-0.0, -0.0, 1.0, -2.0])], [T([])])
+  for dt in ["float32", "int8", "string"]:
+    c(f"SHAPE_{dt}", "SHAPE", [T([2, 3, 4], dt, Q.get(dt))], [T([], "int32")], ("ShapeOptions", {"outType": TT["int32"]}))
+  c("SHAPE_int64", "SHAPE", [T([5, 1])], [T([], "int64")], ("ShapeOptions", {"outType": TT["int64"]}))
+  c("RANK", "RANK", [T([2, 3, 4])], [T([], "int32")])
+  c("WHERE_bool", "WHERE", [T([3, 4], "bool")], [T([], "int64")])
+  c("WHERE_1d", "WHERE", [T([6], "bool")], [T([], "int64")])
+  return out
+
+
 def reduce_cases():
   out = []
   for op in ["ARG_MAX", "ARG_MIN"]:
@@ -188,4 +261,4 @@ def unary_cases():
 
 
 def all_cases():
-  return binary_cases() + quant_cases() + shape_cases() + reduce_cases() + unary_cases()
+  return binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases()

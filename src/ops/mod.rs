@@ -7,8 +7,10 @@ pub mod fixedpoint;
 pub mod util;
 
 mod binary;
-mod eigen;
+mod data;
 mod dpp;
+mod eigen;
+mod movement;
 mod quant;
 mod reduce;
 mod shape;
@@ -57,7 +59,7 @@ pub trait Kernel: Send {
 }
 
 pub fn create(s: &OpSpec) -> Result<Box<dyn Kernel>> {
-    for module in [binary::create, quant::create, reduce::create, shape::create, unary::create] {
+    for module in [binary::create, data::create, movement::create, quant::create, reduce::create, shape::create, unary::create] {
         if let Some(k) = module(s)? {
             return Ok(k);
         }
