@@ -96,7 +96,24 @@ fn setbits(v: u32, lo: u32, n: u32, x: u32) -> u32 {
 
 /// the sticks on the bus: (path, is it still in the DFU bootloader)
 pub fn list() -> Result<Vec<(String, bool)>> {
-    Ok(usb::list(&[DFU, APP])?.into_iter().map(|f| (f.path, (f.vendor, f.product) == DFU)).collect())
+    Ok(usb::list(Backend::Default, &[DFU, APP])?.into_iter().map(|f| (f.path, (f.vendor, f.product) == DFU)).collect())
+}
+
+/// The UsbDk path of the bootloader stick at `path`. The port on the parent hub is the only part both backends share
+/// (see usb::list), so it must single the stick out among the sticks in the bootloader.
+fn usbdk_path(path: &str) -> Result<String> {
+    let port = |p: &str| p.rsplit(['-', '.']).next().unwrap_or_default().to_owned();
+    let same: Vec<_> = usb::list(Backend::UsbDk, &[DFU])?.into_iter().filter(|f| port(&f.path) == port(path)).collect();
+    match same.as_slice() {
+        [f] => Ok(f.path.clone()),
+        [] => Err(Error(format!("UsbDk does not see the bootloader stick at {path}"))),
+        _ => Err(Error(format!(
+            "{} sticks in the bootloader are on port {} of their hubs, so the one at {path} can't be told apart: \
+             plug them in one at a time",
+            same.len(),
+            port(path)
+        ))),
+    }
 }
 
 /// Load the firmware over USB DFU 1.1 (usb_dfu_commands.cc), then reset the stick so it comes back as 18d1:9302.
@@ -105,7 +122,7 @@ fn load_firmware(path: &str) -> Result<()> {
     const UPLOAD: u8 = 2;
     const GETSTATUS: u8 = 3;
     // through UsbDk on Windows: the reset at the end needs it (see usb.rs)
-    let mut dev = Handle::open(Backend::UsbDk, DFU.0, DFU.1, path)?;
+    let mut dev = Handle::open(Backend::UsbDk, DFU.0, DFU.1, &usbdk_path(path)?)?;
     let cfg = dev.control_in(0x80, 6, 0x0200, 0, 512, 1000)?;
     // the DFU interface (class 0xFE, subclass 1, no endpoints) and the transfer size of the DFU functional descriptor
     let (mut iface, mut xfer, mut i) = (None, None, 0);

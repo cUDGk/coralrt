@@ -208,9 +208,11 @@ fn for_each_device<T>(c: &Ctx, mut f: impl FnMut(Ptr, &DeviceDescriptor, String)
     Ok(out)
 }
 
-pub fn list(ids: &[(u16, u16)]) -> Result<Vec<Found>> {
+/// The devices with one of `ids`. The paths are those of the backend: UsbDk numbers a bus per hub and keeps only the
+/// port on that hub, so the stick at "2-6.3" under WinUSB is at "3-3" under UsbDk.
+pub fn list(backend: Backend, ids: &[(u16, u16)]) -> Result<Vec<Found>> {
     let mut found = Vec::new();
-    for_each_device::<()>(ctx(Backend::Default)?, |_, d, path| {
+    for_each_device::<()>(ctx(backend)?, |_, d, path| {
         if ids.contains(&(d.vendor, d.product)) {
             found.push(Found { vendor: d.vendor, product: d.product, path });
         }
