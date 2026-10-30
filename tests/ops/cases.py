@@ -33,6 +33,48 @@ def binary_cases():
   for dt in ["float32", "int32"]:
     for k, (a, b) in enumerate(shapes[:4]):
       out.append(op_case(f"FLOOR_DIV_{dt}_{k}", "FLOOR_DIV", [T(a, dt), T(b, dt, gen=("int", 1, 7) if dt == "int32" else ("uniform", 0.5, 3))], [T([], dt)]))
+  # int16: power-of-two scales (gemmlowp) and general ones (left shift 15)
+  i16 = lambda s: (s, 0)
+  for op, opt in [("ADD", "AddOptions"), ("SUB", "SubOptions")]:
+    for name, sa, sb, so, pot in [("pot_same", 2**-12, 2**-12, 2**-12, True), ("pot_shift", 2**-12, 2**-14, 2**-12, True),
+                                  ("pot_shift2", 2**-15, 2**-12, 2**-12, True), ("general", 0.0007, 0.0011, 0.0013, True),
+                                  ("pot_off", 2**-12, 2**-12, 2**-11, False)]:
+      for k, (a, b) in enumerate(shapes[:3] if op == "SUB" else shapes[:1]):
+        out.append(op_case(f"{op}_int16_{name}_{k}", op, [T(a, "int16", i16(sa)), T(b, "int16", i16(sb))], [T([], "int16", i16(so))],
+                           (opt, {"fusedActivationFunction": 0, "potScaleInt16": pot})))
+  for k, (a, b) in enumerate(shapes[:3]):
+    out.append(op_case(f"MUL_int16_{k}", "MUL", [T(a, "int16", i16(0.001)), T(b, "int16", i16(0.002))], [T([], "int16", i16(0.0015))],
+                       ("MulOptions", {"fusedActivationFunction": 0})))
+  for dt in ["uint8", "int8"]:
+    out.append(op_case(f"MUL_int16_to_{dt}", "MUL", [T([3, 20], "int16", i16(2**-15)), T([3, 20], "int16", i16(2**-15))], [T([], dt, (2**-7, 3))],
+                       ("MulOptions", {"fusedActivationFunction": 0})))
+  bshapes = [([2, 3, 4], [2, 3, 4]), ([2, 3, 4], [4]), ([1, 3, 1], [2, 1, 5]), ([], [3, 2])]
+  for op in ["MAXIMUM", "MINIMUM"]:
+    for dt in ["float32", "uint8", "int8", "int32", "int64", "int16"]:
+      for k, (a, b) in enumerate(bshapes):
+        out.append(op_case(f"{op}_{dt}_{k}", op, [T(a, dt, Q.get(dt)), T(b, dt, Q.get(dt))], [T([], dt, Q.get(dt))]))
+  for k, (a, b) in enumerate(bshapes):
+    out.append(op_case(f"POW_f32_{k}", "POW", [T(a, gen=("uniform", 0.1, 3)), T(b, gen=("uniform", -3, 3))], [T([])]))
+    out.append(op_case(f"POW_int32_{k}", "POW", [T(a, "int32", gen=("int", -6, 6)), T(b, "int32", gen=("int", 0, 5))], [T([], "int32")]))
+    for dt in ["float32", "int32"]:
+      out.append(op_case(f"SQUARED_DIFFERENCE_{dt}_{k}", "SQUARED_DIFFERENCE", [T(a, dt), T(b, dt)], [T([], dt)]))
+    out.append(op_case(f"SQUARED_DIFFERENCE_int8_{k}", "SQUARED_DIFFERENCE", [T(a, "int8", Q["int8"]), T(b, "int8", Q2["int8"])], [T([], "int8", (0.5, -100))]))
+    for dt in ["float32", "int32", "int64"]:
+      gen = ("choice", [-7, -3, -2, 2, 3, 5]) if dt != "float32" else ("choice", [-2.5, -1.5, 1.25, 3.0, -0.75])
+      out.append(op_case(f"FLOOR_MOD_{dt}_{k}", "FLOOR_MOD", [T(a, dt, gen=("int", -20, 20) if dt != "float32" else None), T(b, dt, gen=gen)], [T([], dt)]))
+    for op in ["LOGICAL_AND", "LOGICAL_OR"]:
+      out.append(op_case(f"{op}_{k}", op, [T(a, "bool"), T(b, "bool")], [T([], "bool")]))
+  cmps = ["EQUAL", "NOT_EQUAL", "LESS", "LESS_EQUAL", "GREATER", "GREATER_EQUAL"]
+  for op in cmps:
+    for dt in ["float32", "int32", "int64", "uint8", "int8"] + (["bool", "string"] if op in ("EQUAL", "NOT_EQUAL") else []):
+      for k, (a, b) in enumerate(bshapes):
+        gen = ("int", 0, 3) if dt in ("int32", "int64") else ("choice", [-1.0, 0.0, 1.0, 0.5]) if dt == "float32" else None
+        qa, qb = (Q.get(dt), Q2.get(dt)) if k % 2 else (Q.get(dt), Q.get(dt))
+        out.append(op_case(f"{op}_{dt}_{k}", op, [T(a, dt, qa, gen=gen), T(b, dt, qb, gen=gen)], [T([], "bool")]))
+  for k, (a, b) in enumerate([([2, 3, 4], [2, 3, 4]), ([2, 3, 4], [4]), ([1, 2, 3, 4], [1, 1, 4])]):
+    out.append(op_case(f"PRELU_f32_{k}", "PRELU", [T(a), T(b, gen=("uniform", -1, 1))], [T([])]))
+    for dt in ["uint8", "int8"]:
+      out.append(op_case(f"PRELU_{dt}_{k}", "PRELU", [T(a, dt, Q[dt]), T(b, dt, Q2[dt])], [T([], dt, QO[dt])]))
   return out
 
 

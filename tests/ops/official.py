@@ -52,6 +52,9 @@ def record(case, models, oracle):
     for inv in range(case.invokes):
       for k, (d, t) in enumerate(zip(details, ins)):
         v = random_values(t, rng)
+        if t.dtype == "string" and np.ndim(v) == 0:
+          # 2.5's wrapper reads a 0-d array's raw buffer: of an object array that is the PyObject pointer
+          v = np.array(v.item(), dtype=bytes)
         it.set_tensor(d["index"], v)
         with open(os.path.join(oracle, f"{case.name}.{inv}.in{k}.bin"), "wb") as f:
           f.write(tensor_bytes(t.dtype, v))
