@@ -88,6 +88,10 @@ def quant_cases():
     out.append(op_case(f"DEQUANTIZE_{dt}", "DEQUANTIZE", [T([4, 100], dt, Q[dt])], [T([4, 100])]))
   out.append(op_case("DEQUANTIZE_int16", "DEQUANTIZE", [T([4, 100], "int16", Q["int16"])], [T([4, 100])]))
   out.append(op_case("DEQUANTIZE_float16", "DEQUANTIZE", [T([4, 25], "float16", data=[[i * 0.37 - 9 for i in range(25)]] * 4)], [T([4, 25])]))
+  # ranges with 0 inside, at an end, outside (the zero point clamps), and wide grids
+  for k, (mn, mx, bits) in enumerate([(-1.0, 1.0, 8), (-0.3, 5.7, 8), (0.0, 2.0, 4), (-6.0, 0.0, 16), (-2.5, 2.5, 3), (0.1, 3.0, 8), (-7.3, -0.2, 8)]):
+    out.append(op_case(f"FAKE_QUANT_{k}", "FAKE_QUANT", [T([4, 50], gen=("uniform", -8, 8))], [T([4, 50])],
+                       ("FakeQuantOptions", {"min": mn, "max": mx, "numBits": bits, "narrowRange": False})))
   kinds = ["float32", "int32", "int64", "uint8", "int8", "int16", "bool", "float64", "uint32", "complex64"]
   for a in kinds:
     for b in kinds:
@@ -224,6 +228,25 @@ def reduce_cases():
           out.append(op_case(f"{op}_{dt}_{axis}_{odt}", op, [T([3, 4, 5], dt, gen=("int", 0, 3) if dt != "float32" else None), T([1], "int32", data=[axis])],
                              [T([], odt)], (opt, {"outputType": TT[odt]})))
     out.append(op_case(f"{op}_axis_input", op, [T([3, 4]), T([1], "int32", value=[1])], [T([], "int64")], (opt, {"outputType": TT["int64"]})))
+  for dt in ["float32", "int32", "int64"]:
+    for k, (shape, axis) in enumerate([([3, 5], 1), ([3, 5], 0), ([2, 3, 4], -2), ([7], 0)]):
+      for ex, rev in [(False, False), (True, False), (False, True), (True, True)]:
+        out.append(op_case(f"CUMSUM_{dt}_{k}_{int(ex)}{int(rev)}", "CUMSUM", [T(shape, dt), T([], "int32", data=axis)], [T([], dt)],
+                           ("CumsumOptions", {"exclusive": ex, "reverse": rev})))
+  out.append(op_case("CUMSUM_f32_signed_zero", "CUMSUM", [T([2, 3], value=[[-0.0, -0.0, 1.0], [-0.0, 2.0, -2.0]]), T([], "int32", data=1)], [T([])],
+                     ("CumsumOptions", {"exclusive": False, "reverse": False})))
+  for dt in ["float32", "int32"]:
+    ids = [0, 0, 1, 2, 2, 2]
+    out.append(op_case(f"SEGMENT_SUM_{dt}", "SEGMENT_SUM", [T([6, 3], dt), T([6], "int32", data=ids)], [T([], dt)]))
+    out.append(op_case(f"SEGMENT_SUM_{dt}_ids_input", "SEGMENT_SUM", [T([6, 2, 2], dt), T([6], "int32", value=[0, 1, 1, 1, 2, 3])], [T([], dt)]))
+    out.append(op_case(f"SEGMENT_SUM_{dt}_const", "SEGMENT_SUM", [T([4, 2], dt, data=[[1, 2], [3, 4], [5, 6], [7, 8]]), T([4], "int32", data=[0, 0, 0, 1])], [T([], dt)]))
+  out.append(op_case("SEGMENT_SUM_f32_signed_zero", "SEGMENT_SUM", [T([2, 2], value=[[-0.0, 1.0], [-0.0, -1.0]]), T([2], "int32", data=[0, 1])], [T([])]))
+  for dt in ["float32", "uint8", "int8", "int32", "int64"]:
+    # few distinct values, so ties and their index order show
+    gen = ("int", 0, 4) if dt != "float32" else ("choice", [1.0, -1.0, 0.5, 2.0, -0.0, 0.0])
+    for k, (shape, kk) in enumerate([([3, 8], 3), ([2, 2, 5], 5), ([6], 1), ([4, 7], 0)]):
+      out.append(op_case(f"TOPK_V2_{dt}_{k}", "TOPK_V2", [T(shape, dt, gen=gen), T([], "int32", data=kk)], [T([], dt), T([], "int32")]))
+  out.append(op_case("TOPK_V2_k_input", "TOPK_V2", [T([3, 6]), T([], "int32", value=2)], [T([]), T([], "int32")]))
   return out
 
 

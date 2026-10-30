@@ -1,4 +1,4 @@
-//! Reductions along axes (reduce.cc, arg_min_max.cc).
+//! Reductions and scans along axes (reduce.cc, arg_min_max.cc, cumsum.cc, segment_sum.cc, topk_v2.cc).
 
 use super::util::*;
 use super::{Io, Kernel};
@@ -18,6 +18,9 @@ pub fn create(s: &OpSpec) -> Result<Option<Box<dyn Kernel>>> {
         82 => Box::new(Reduce { op: RedOp::Max, keep_dims }),
         89 => Box::new(Reduce { op: RedOp::Min, keep_dims }),
         91 => Box::new(Reduce { op: RedOp::Any, keep_dims }),
+        128 => Box::new(CumSum { exclusive: opt(s, 0, 0u8) != 0, reverse: opt(s, 1, 0u8) != 0 }),
+        125 => Box::new(SegmentSum),
+        48 => Box::new(TopK),
         _ => return Ok(None),
     }))
 }
@@ -298,14 +301,192 @@ impl Kernel for ArgMinMax {
             Self::resize(io)?;
         }
         let i = io.input(0)?;
-        let ax = Self::axis(io)?;
-        let (outer, len, inner) = (i.shape[..ax].iter().product::<usize>(), i.shape[ax], i.shape[ax + 1..].iter().product::<usize>());
+        let (outer, len, inner) = around(&i.shape, Self::axis(io)?);
         let best = match i.dtype {
             TType::F32 | TType::F64 => along(&f64s(i)?, outer, len, inner, self.max),
             _ => along(&ints(i)?, outer, len, inner, self.max),
         };
         put_ints(&mut io.outs[0], &best)
     }
+}
+
+/// (elements before, along, after) the axis
+fn around(shape: &[usize], ax: usize) -> (usize, usize, usize) {
+    (shape[..ax].iter().product(), shape[ax], shape[ax + 1..].iter().product())
+}
+
+/// cumsum.cc (Eigen's scan, one thread): along the axis from 0 in order, from the end when reversed; exclusive
+/// writes the sum before adding the element
+struct CumSum {
+    exclusive: bool,
+    reverse: bool,
+}
+
+impl Kernel for CumSum {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let (i, a) = (io.input(0)?, io.input(1)?);
+        if !matches!(i.dtype, TType::I32 | TType::I64 | TType::F32) || a.dtype != TType::I32 || ints(a)?.len() != 1 || i.shape.is_empty() {
+            return err("CUMSUM takes int32, int64 or float32 of rank 1 or more, and one int32 axis");
+        }
+        same_shape(i, &mut io.outs[0]);
+        Ok(())
+    }
+
+    fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let i = io.input(0)?;
+        let (outer, len, inner) = around(&i.shape, axis_of(ints(io.input(1)?)?[0], i.shape.len())?);
+        let (ex, rev, o) = (self.exclusive, self.reverse, &mut io.outs[0]);
+        match i.dtype {
+            TType::F32 => scan(i.as_slice::<f32>(), o.as_mut_slice(), outer, len, inner, ex, rev, |a, x| a + x),
+            TType::I32 => scan(i.as_slice::<i32>(), o.as_mut_slice(), outer, len, inner, ex, rev, i32::wrapping_add),
+            _ => scan(i.as_slice::<i64>(), o.as_mut_slice(), outer, len, inner, ex, rev, i64::wrapping_add),
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scan<T: Copy + Default>(x: &[T], o: &mut [T], outer: usize, len: usize, inner: usize, exclusive: bool, reverse: bool, add: impl Fn(T, T) -> T) {
+    for out in 0..outer {
+        for inn in 0..inner {
+            let mut acc = T::default();
+            for step in 0..len {
+                let at = (out * len + if reverse { len - 1 - step } else { step }) * inner + inn;
+                if exclusive {
+                    o[at] = acc;
+                    acc = add(acc, x[at]);
+                } else {
+                    acc = add(acc, x[at]);
+                    o[at] = acc;
+                }
+            }
+        }
+    }
+}
+
+/// segment_sum.cc: each row of the data added, in order from zeros, into the output row of its segment id (the ids
+/// sorted, from 0, in steps of 0 or 1)
+struct SegmentSum;
+
+impl SegmentSum {
+    fn resize(io: &mut Io) -> Result<()> {
+        let (d, ids_t) = (io.input(0)?, io.input(1)?);
+        let ids = ints(ids_t)?;
+        let n = ids_t.shape.first().copied().unwrap_or(0);
+        if d.shape.first() != Some(&n) {
+            return err("SEGMENT_SUM needs one segment id per row of the data");
+        }
+        let ok = ids[..n].iter().enumerate().all(|(k, &id)| if k == 0 { id == 0 } else { id - ids[k - 1] == 0 || id - ids[k - 1] == 1 });
+        if !ok {
+            return err("segment ids must start at 0 and go up in steps of 0 or 1");
+        }
+        let mut s = d.shape.clone();
+        s[0] = if n == 0 { 0 } else { ids[n - 1] as usize + 1 };
+        io.outs[0].resize(s);
+        Ok(())
+    }
+}
+
+impl Kernel for SegmentSum {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let (d, ids) = (io.input(0)?, io.input(1)?);
+        if !matches!(d.dtype, TType::I32 | TType::F32) || ids.dtype != TType::I32 {
+            return err("SEGMENT_SUM takes int32 or float32 data and int32 segment ids");
+        }
+        if d.alloc == Alloc::Constant && ids.alloc == Alloc::Constant {
+            Self::resize(io)
+        } else {
+            io.outs[0].alloc = Alloc::Dynamic;
+            Ok(())
+        }
+    }
+
+    fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        if io.outs[0].alloc == Alloc::Dynamic {
+            Self::resize(io)?;
+        }
+        let (d, ids) = (io.input(0)?, ints(io.input(1)?)?);
+        let row: usize = d.shape[1..].iter().product();
+        let o = &mut io.outs[0];
+        o.data_mut().fill(0);
+        for (r, &id) in ids.iter().take(d.shape[0]).enumerate() {
+            let (src, dst) = (r * row..(r + 1) * row, id as usize * row..(id as usize + 1) * row);
+            if d.dtype == TType::F32 {
+                o.as_mut_slice::<f32>()[dst].iter_mut().zip(&d.as_slice::<f32>()[src]).for_each(|(a, &x)| *a += x);
+            } else {
+                o.as_mut_slice::<i32>()[dst].iter_mut().zip(&d.as_slice::<i32>()[src]).for_each(|(a, &x)| *a = a.wrapping_add(x));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// topk_v2.cc: per row (last axis) the k largest values and their indices, larger first, the earlier index first
+/// among equals
+struct TopK;
+
+impl TopK {
+    fn resize(io: &mut Io) -> Result<()> {
+        let k = ints(io.input(1)?)?;
+        let mut s = io.input(0)?.shape.clone();
+        match (k.as_slice(), s.last_mut()) {
+            ([k], Some(last)) if *k >= 0 && *k as usize <= *last => *last = *k as usize,
+            _ => return err("TOPK_V2 needs one k from 0 to the size of the last dimension"),
+        }
+        io.outs[0].resize(s.clone());
+        io.outs[1].resize(s);
+        Ok(())
+    }
+}
+
+impl Kernel for TopK {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let (i, k) = (io.input(0)?, io.input(1)?);
+        if i.dtype != io.outs[0].dtype || k.dtype != TType::I32 {
+            return err("TOPK_V2 needs values of the input's type and an int32 k");
+        }
+        // 2.5 sets the index output's type itself
+        io.outs[1].dtype = TType::I32;
+        if k.alloc == Alloc::Constant {
+            Self::resize(io)
+        } else {
+            io.outs[0].alloc = Alloc::Dynamic;
+            io.outs[1].alloc = Alloc::Dynamic;
+            Ok(())
+        }
+    }
+
+    fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        if io.outs[0].alloc == Alloc::Dynamic {
+            Self::resize(io)?;
+        }
+        let i = io.input(0)?;
+        let row = i.shape[i.shape.len() - 1];
+        let k = io.outs[0].shape[i.shape.len() - 1];
+        let picks = match i.dtype {
+            TType::F32 => top_k(i.as_slice::<f32>(), row, k),
+            TType::U8 | TType::I8 | TType::I32 | TType::I64 => top_k(&ints(i)?, row, k),
+            t => return err(format!("{t:?} is not supported by TOPK_V2")),
+        };
+        let es = i.dtype.size();
+        let (src, vals) = (i.data(), io.outs[0].data_mut());
+        for (d, &p) in vals.chunks_exact_mut(es).zip(&picks) {
+            d.copy_from_slice(&src[p * es..(p + 1) * es]);
+        }
+        put_ints(&mut io.outs[1], &picks.iter().map(|&p| (p % row.max(1)) as i64).collect::<Vec<_>>())
+    }
+}
+
+/// the flat positions of each row's k largest, in TopContainer's order
+fn top_k<T: PartialOrd>(v: &[T], row: usize, k: usize) -> Vec<usize> {
+    let mut picks = Vec::with_capacity(v.len() / row.max(1) * k);
+    for (r, vals) in v.chunks(row.max(1)).enumerate() {
+        let mut idx: Vec<usize> = (0..vals.len()).collect();
+        // a stable sort: equal values keep the earlier index first
+        idx.sort_by(|&a, &b| vals[b].partial_cmp(&vals[a]).unwrap_or(std::cmp::Ordering::Equal));
+        picks.extend(idx[..k].iter().map(|&c| r * row + c));
+    }
+    picks
 }
 
 /// for each (outer, inner) position, the first index along the axis of the largest (smallest) value: std::greater /

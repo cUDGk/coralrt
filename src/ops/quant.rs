@@ -1,4 +1,4 @@
-//! Changes of element type: QUANTIZE, DEQUANTIZE, CAST.
+//! Changes of element type: QUANTIZE, DEQUANTIZE, CAST; and FAKE_QUANT, float rounded to a quantized grid.
 
 use super::util::*;
 use super::{Io, Kernel};
@@ -12,8 +12,57 @@ pub fn create(s: &OpSpec) -> Result<Option<Box<dyn Kernel>>> {
         114 => Box::new(Elementwise(quantize)),
         6 => Box::new(Elementwise(dequantize)),
         53 => Box::new(Elementwise(cast)),
+        80 => {
+            if opt(s, 3, 0u8) != 0 {
+                return err("narrow_range FAKE_QUANT is not supported at run time");
+            }
+            Box::new(FakeQuant { min: opt(s, 0, 0.0), max: opt(s, 1, 0.0), num_bits: opt(s, 2, 0) })
+        }
         _ => return Ok(None),
     }))
+}
+
+/// fake_quant.cc (reference_ops::FakeQuant): the range nudged so 0 is on the grid (NudgeQuantizationRange), then
+/// each value clamped to it and rounded to the grid (FakeQuantizeArray), all in float
+struct FakeQuant {
+    min: f32,
+    max: f32,
+    num_bits: i32,
+}
+
+impl Kernel for FakeQuant {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        if io.input(0)?.dtype != TType::F32 {
+            return err("FAKE_QUANT takes float32");
+        }
+        same_shape(io.input(0)?, &mut io.outs[0]);
+        Ok(())
+    }
+
+    fn eval(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let quant_max = ((1i64 << self.num_bits) - 1) as i32;
+        let (qmin, qmax) = (0.0f32, quant_max as f32);
+        let scale = (self.max - self.min) / (qmax - qmin);
+        let zero_point_from_min = qmin - self.min / scale;
+        // the zero point is a uint16_t
+        let zp = if zero_point_from_min < qmin {
+            0
+        } else if zero_point_from_min > qmax {
+            quant_max as u16
+        } else {
+            cvtt(zero_point_from_min.round() as f64, false) as u16
+        } as f32;
+        let (nmin, nmax) = ((qmin - zp) * scale, (qmax - zp) * scale);
+        let inv_scale = 1.0 / scale;
+        let i = io.input(0)?;
+        for (d, &x) in io.outs[0].as_mut_slice::<f32>().iter_mut().zip(i.as_slice::<f32>()) {
+            // std::min(nmax, std::max(nmin, x)): NaN becomes nmin
+            let c = if nmin < x { x } else { nmin };
+            let c = if c < nmax { c } else { nmax };
+            *d = ((c - nmin) * inv_scale).round() * scale + nmin;
+        }
+        Ok(())
+    }
 }
 
 /// an op from one tensor to one of the same shape, element by element (1-byte inputs go through a 256-entry table)
