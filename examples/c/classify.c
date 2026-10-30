@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
     fprintf(stderr, "usage: %s model_edgetpu.tflite input.bin [labels.txt]\n", argv[0]);
     return 2;
   }
-  CoralInterpreter* it = coral_interpreter_new(argv[1], NULL, NULL);
+  CoralInterpreter* it = coral_interpreter_new(argv[1], NULL);
   if (!it) {
     fprintf(stderr, "coralrt: %s\n", coral_last_error());
     return 1;

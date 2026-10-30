@@ -4,7 +4,9 @@
 
 use crate::chip::EdgeTpu;
 use crate::exe::{self, DType, ExeType, Executable, Layer, TensorLayout};
-use crate::tflite::{TType, TensorInfo};
+use crate::interp::Env;
+use crate::ops::{Io, Kernel};
+use crate::tensor::{TType, Tensor};
 use crate::{Error, Result};
 use std::collections::HashMap;
 
@@ -12,6 +14,30 @@ pub struct EdgeTpuOp {
     pub exes: Vec<Executable>,
     infer: usize,
     caching: Vec<usize>,
+    /// batches per invoke (from prepare)
+    batches: usize,
+}
+
+impl Kernel for EdgeTpuOp {
+    fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
+        let ins = (0..io.n_in()).map(|k| io.input(k)).collect::<Result<Vec<_>>>()?;
+        let outs: Vec<&Tensor> = io.outs.iter().collect();
+        self.batches = self.validate(&ins, &outs)?;
+        Ok(())
+    }
+
+    fn eval(&mut self, io: &mut Io, env: &mut Env) -> Result<()> {
+        let dev = env.device.ok_or_else(|| Error("no Edge TPU".into()))?;
+        let ins = (0..io.n_in()).map(|k| io.input(k).map(|t| t.data())).collect::<Result<Vec<_>>>()?;
+        let metas: Vec<Tensor> = io.outs.iter().map(|o| o.clone_meta()).collect();
+        let infos: Vec<&Tensor> = metas.iter().collect();
+        let mut out_data: Vec<&mut [u8]> = io.outs.iter_mut().map(|o| o.data_mut()).collect();
+        self.invoke(&mut dev.lock(), self.batches, &ins, &mut out_data, &infos)
+    }
+
+    fn edgetpu(&self) -> Option<&EdgeTpuOp> {
+        Some(self)
+    }
 }
 
 /// TFLite type an Edge TPU layer type is exchanged as (custom_op.cc ValidateDataType)
@@ -47,7 +73,7 @@ impl EdgeTpuOp {
         if exes[infer].outputs.iter().any(|l| l.name.ends_with("_variable_output")) {
             return Err(Error("Edge TPU models with variable (stateful) outputs are not supported".into()));
         }
-        Ok(EdgeTpuOp { exes, infer, caching })
+        Ok(EdgeTpuOp { exes, infer, caching, batches: 1 })
     }
 
     fn exe(&self) -> &Executable {
@@ -55,7 +81,7 @@ impl EdgeTpuOp {
     }
 
     /// custom_op.cc ValidateInputsAndOutputs: types and sizes, and the batch count (the first dimension may batch)
-    pub fn validate(&self, ins: &[&TensorInfo], outs: &[&TensorInfo]) -> Result<usize> {
+    pub fn validate(&self, ins: &[&Tensor], outs: &[&Tensor]) -> Result<usize> {
         let e = self.exe();
         if ins.len() != e.inputs.len() || outs.len() < e.outputs.len() {
             return Err(Error(format!(
@@ -66,7 +92,7 @@ impl EdgeTpuOp {
                 e.outputs.len()
             )));
         }
-        let batches_of = |t: &TensorInfo, single: usize| {
+        let batches_of = |t: &Tensor, single: usize| {
             if t.shape.first().is_some_and(|&b| b * single == t.bytes()) { t.shape[0] } else { 1 }
         };
         let mut batches = 0;
@@ -98,7 +124,7 @@ impl EdgeTpuOp {
         Ok(batches)
     }
 
-    pub fn invoke(&self, tpu: &mut EdgeTpu, batches: usize, ins: &[&[u8]], outs: &mut [&mut [u8]], out_info: &[&TensorInfo]) -> Result<()> {
+    pub fn invoke(&self, tpu: &mut EdgeTpu, batches: usize, ins: &[&[u8]], outs: &mut [&mut [u8]], out_info: &[&Tensor]) -> Result<()> {
         let e = self.exe();
         let caching: Vec<&Executable> = self.caching.iter().map(|&i| &self.exes[i]).collect();
         tpu.ensure_cached(e.caching_token, &caching)?;
@@ -156,7 +182,7 @@ fn flip_sign(l: &Layer, buf: &mut [u8]) {
     }
 }
 
-fn reformat_classifier(l: &Layer, user: &[u8], dst: &mut [u8], info: &TensorInfo) {
+fn reformat_classifier(l: &Layer, user: &[u8], dst: &mut [u8], info: &Tensor) {
     let (scale, zp) = (info.scale(), info.zero_point() as f32);
     for (j, d) in dst.iter_mut().enumerate() {
         let v = if l.dtype == DType::F32 {
