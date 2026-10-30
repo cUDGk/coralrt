@@ -733,6 +733,171 @@ def rnn_cases():
   return out
 
 
+def lstm_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  # mode: "float32", "int8" / "uint8" (hybrid weights), "int" (int8 activations, int16 cell)
+  def cell(mode, ni, nc, no, seed, cifg=False, peep=False, proj=False, proj_bias=False):
+    """inputs 1-17 of one direction: weights, peepholes, biases, projection"""
+    wt = "int8" if mode == "int" else mode
+    def W(shape, s, scale):
+      if wt == "float32":
+        return T(shape, data=const(shape, "float32", s, -0.6, 0.6))
+      return T(shape, wt, (scale, 0), data=const(shape, wt, s))
+    def P(s):
+      if mode == "int":
+        return T([nc], "int16", (2 ** -15, 0), data=const([nc], "int16", s, -3000, 3000))
+      return W([nc], s, 0.004)
+    def B(n, s):
+      if mode == "int":
+        return T([n], "int32", data=const([n], "int32", s, -3000, 3000))
+      return T([n], data=const([n], "float32", s, -0.5, 0.5))
+    xs = [None if cifg else W([nc, ni], seed, 0.01)] + [W([nc, ni], seed + g, 0.01) for g in (1, 2, 3)]
+    hs = [None if cifg else W([nc, no], seed + 4, 0.008)] + [W([nc, no], seed + 4 + g, 0.008) for g in (1, 2, 3)]
+    ps = [None if cifg or not peep else P(seed + 8)] + [P(seed + 9 + g) if peep else None for g in (0, 1)]
+    bs = [None if cifg else B(nc, seed + 11)] + [B(nc, seed + 12 + g) for g in (0, 1, 2)]
+    return xs + hs + ps + bs + [W([no, nc], seed + 15, 0.01) if proj else None, B(no, seed + 16) if proj and proj_bias else None]
+  def norm(mode, nc, seed, cifg=False):
+    if mode == "int":
+      L = lambda s: T([nc], "int16", (2 ** -14, 0), data=const([nc], "int16", s, 8192, 24576))
+    else:
+      L = lambda s: T([nc], data=const([nc], "float32", s, 0.5, 1.5))
+    return [None if cifg else L(seed)] + [L(seed + g) for g in (1, 2, 3)]
+  def states(mode, nb, nc, no, hq=(1 / 128, 0)):
+    if mode == "int":
+      return [T([nb, no], "int8", hq, var=True), T([nb, nc], "int16", (2 ** -11, 0), var=True)]
+    return [T([nb, no], var=True), T([nb, nc], var=True)]
+  def x_in(mode, shape):
+    return T(shape, "int8", (0.01, 3)) if mode == "int" else T(shape)
+  def y_out(mode, hq=(1 / 128, 0)):
+    return T([], "int8", hq) if mode == "int" else T([])
+  lstm = lambda act="TANH", cell_clip=0.0, proj_clip=0.0, asym=False: ("LSTMOptions", {"fusedActivationFunction": ACT[act], "cellClip": cell_clip, "projClip": proj_clip, "kernelType": 0, "asymmetricQuantizeInputs": asym})
+  # 8x8_16: intermediates 0-3 the gates' matmul scales (layer norm only), 4 the hidden state's
+  def inter16(hidden=(1 / 128, 0), ln=False):
+    gates = [T([1], "int16", (0.0007 + 0.0001 * k, 0)) for k in range(4)] if ln else [T([1], "int16", (2 ** -12, 0)) for _ in range(4)]
+    return gates + [T([1], "int8", hidden)]
+  nb, ni, nc = 2, 3, 4
+  # float and hybrid LSTM
+  for mode in ["float32", "int8", "uint8"]:
+    for asym in [False] if mode == "float32" else [False, True]:
+      tag = f"{mode}_{int(asym)}"
+      for name, kw, no in [("plain", {}, nc), ("cifg_peep_proj", dict(cifg=True, peep=True, proj=True, proj_bias=True), 3), ("peep_proj", dict(peep=True, proj=True), 5)]:
+        ins = [x_in(mode, [nb, ni])] + cell(mode, ni, nc, no, 600, **kw) + states(mode, nb, nc, no)
+        c(f"LSTM_{tag}_{name}", "LSTM", ins, [y_out(mode)], lstm(asym=asym, cell_clip=0.8, proj_clip=0.6 if kw else 0.0), invokes=3)
+      ins = [x_in(mode, [nb, ni])] + cell(mode, ni, nc, nc, 620, peep=True) + states(mode, nb, nc, nc) + norm(mode, nc, 640)
+      c(f"LSTM_{tag}_layer_norm", "LSTM", ins, [y_out(mode)], lstm(asym=asym), invokes=3)
+      ins = [x_in(mode, [nb, ni])] + cell(mode, ni, nc, nc, 650, cifg=True) + states(mode, nb, nc, nc) + norm(mode, nc, 660, cifg=True)
+      c(f"LSTM_{tag}_layer_norm_cifg", "LSTM", ins, [y_out(mode)], lstm(asym=asym), invokes=3)
+  for act in ["NONE", "RELU", "RELU6", "SIGN_BIT"]:
+    ins = [x_in("float32", [nb, ni])] + cell("float32", ni, nc, nc, 670, peep=True) + states("float32", nb, nc, nc)
+    c(f"LSTM_float32_act_{act}", "LSTM", ins, [T([])], lstm(act), invokes=3)
+  ins = [x_in("int8", [nb, ni])] + cell("int8", ni, nc, nc, 680) + states("int8", nb, nc, nc)
+  c("LSTM_int8_act_NONE", "LSTM", ins, [T([])], lstm("NONE"), invokes=3)
+  # the deprecated 20-input form
+  c("LSTM_float32_20", "LSTM", [x_in("float32", [nb, ni])] + cell("float32", ni, nc, nc, 690) + states("float32", nb, nc, nc), [T([])], lstm(), invokes=2)
+  # inputs all zero: the hybrid kernel skips the input's matmul (and keeps the last factors)
+  ins = [T([nb, ni], value=np.zeros([nb, ni], "float32"))] + cell("int8", ni, nc, 3, 700, proj=True) + states("int8", nb, nc, 3)
+  c("LSTM_int8_0_zero_input", "LSTM", ins, [T([])], lstm(), invokes=3)
+  # sparse hybrid weights in 1x16 blocks (input-to-output sparse makes it a sparse op; it needs a projection)
+  def sparse(rows, cols, seed, density):
+    rng = np.random.default_rng(seed)
+    segs, idx = [0], []
+    for r in range(rows):
+      blocks = [b for b in range(cols // 16) if rng.random() < density]
+      idx += blocks
+      segs.append(len(idx))
+    sp = {"traversal_order": [0, 1, 2], "block_map": [1], "dim_metadata": [(0, rows, None, None), (1, 0, segs, idx), (0, 16, None, None)]}
+    return T([rows, cols], "int8", (0.01, 0), data=const([len(idx) * 16], "int8", seed), sparsity=sp)
+  sni, snc, sno = 32, 16, 16
+  base = cell("int8", sni, snc, sno, 710, proj=True, proj_bias=True)
+  for sparse_rec in [False, True]:
+    ins = list(base)
+    ins[3] = sparse(snc, sni, 720, 0.6)
+    ins[1] = sparse(snc, sni, 721, 0.5)
+    if sparse_rec:
+      ins[5], ins[7] = sparse(snc, sno, 722, 0.7), sparse(snc, sno, 723, 0.5)
+      ins[15] = sparse(sno, snc, 724, 0.8)
+    for zero in [False, True]:
+      x = T([nb, sni], value=np.zeros([nb, sni], "float32")) if zero else T([nb, sni])
+      c(f"LSTM_sparse_{int(sparse_rec)}{int(zero)}", "LSTM", [x] + ins + states("int8", nb, snc, sno), [T([])], lstm(), invokes=3)
+  # integer 8x8_16
+  for name, kw, no, ln in [("plain", {}, nc, False), ("cifg_peep_proj", dict(cifg=True, peep=True, proj=True, proj_bias=True), 3, False),
+                           ("peep_proj", dict(peep=True, proj=True), 3, False), ("layer_norm", dict(peep=True), nc, True),
+                           ("layer_norm_cifg_proj", dict(cifg=True, proj=True, proj_bias=True), 3, True)]:
+    hq = (1 / 100, -2) if kw.get("proj") else (1 / 128, 0)
+    ins = [x_in("int", [nb, ni])] + cell("int", ni, nc, no, 730, **kw) + states("int", nb, nc, no, hq)
+    if ln:
+      ins += norm("int", nc, 750, cifg=kw.get("cifg", False))
+    hidden = (1 / 120, 2) if kw.get("proj") else (1 / 128, 0)
+    c(f"LSTM_int_{name}", "LSTM", ins, [y_out("int", hq)], lstm(cell_clip=3.0, proj_clip=0.7), intermediates=inter16(hidden, ln), invokes=3)
+  # integer 8x8_8: twelve intermediates, layer norm, a projection with a bias, the cell in Q0.15
+  ins = [x_in("int", [nb, ni])] + cell("int", ni, nc, 3, 760, cifg=True, proj=True, proj_bias=True)
+  ins += [T([nb, 3], "int8", (1 / 100, -2), var=True), T([nb, nc], "int16", (2 ** -15, 0), var=True)] + norm("int", nc, 770, cifg=True)
+  ins[13:16] = [T([nc], "int32", data=const([nc], "int32", 780 + g, -3000000, 3000000)) for g in range(3)]
+  ins[17] = T([3], "int32", data=const([3], "int32", 783, -2000, 2000))
+  inter8 = [T([1], "int8", (0.02 + 0.004 * k, (k % 5) - 2)) for k in range(12)]
+  c("LSTM_int_8x8_8", "LSTM", ins, [y_out("int", (1 / 100, -2))], lstm(cell_clip=0.8, proj_clip=0.9), intermediates=inter8, invokes=3)
+  # the basic kernel (5 inputs; the previous activation and state written back)
+  depth = 4
+  basic = ("LSTMOptions", {"fusedActivationFunction": ACT["TANH"], "cellClip": 0.0, "projClip": 0.0, "kernelType": 1, "asymmetricQuantizeInputs": False})
+  ins = [T([nb, ni]), T([nb, depth], var=True), T([4 * depth, ni + depth], data=const([4 * depth, ni + depth], "float32", 790, -0.6, 0.6)),
+         T([4 * depth], data=const([4 * depth], "float32", 791, -0.5, 0.5)), T([nb, depth], var=True)]
+  c("LSTM_basic_float32", "LSTM", ins, [T([]), T([]), T([]), T([])], basic, tol=1e-5, invokes=3)
+  qa, qs = (1 / 128, 128), (2 ** -11, 0)
+  ins = [T([nb, ni], "uint8", qa), T([nb, depth], "uint8", qa, var=True), T([4 * depth, ni + depth], "uint8", (0.02, 120), data=const([4 * depth, ni + depth], "uint8", 792)),
+         T([4 * depth], "int32", (0.02 / 128, 0), data=const([4 * depth], "int32", 793, -3000, 3000)), T([nb, depth], "int16", qs, var=True)]
+  outs = [T([], "uint8", qa), T([], "int16", qs), T([], "uint8", qa), T([], "int16", (2 ** -12, 0))]
+  c("LSTM_basic_uint8", "LSTM", ins, outs, basic, invokes=3)
+  # UNIDIRECTIONAL_SEQUENCE_LSTM: 4 steps of 2 batch rows, time-major or batch-major
+  uni = lambda tm, asym=False, cell_clip=0.0, proj_clip=0.0: ("UnidirectionalSequenceLSTMOptions", {"fusedActivationFunction": ACT["TANH"], "cellClip": cell_clip, "projClip": proj_clip, "timeMajor": tm, "asymmetricQuantizeInputs": asym})
+  T_, B_ = 4, 2
+  for mode in ["float32", "int8", "uint8", "int"]:
+    for asym in [True] if mode in ("int8", "uint8") else [False]:
+      for tm in [True, False]:
+        shape = [T_, B_, ni] if tm else [B_, T_, ni]
+        for name, kw, no, ln in [("plain", {}, nc, False), ("cifg_peep_proj", dict(cifg=True, peep=True, proj=True, proj_bias=True), 3, False),
+                                 ("layer_norm_proj", dict(peep=mode != "int", proj=True), 3, True)]:
+          hq = (1 / 100, -2) if kw.get("proj") else (1 / 128, 0)
+          ins = [x_in(mode, shape)] + cell(mode, ni, nc, no, 800, **kw) + states(mode, B_, nc, no, hq)
+          if ln:
+            ins += norm(mode, nc, 820)
+          inter = inter16((1 / 120, 2) if kw.get("proj") else (1 / 128, 0), ln) if mode == "int" else None
+          c(f"UNIDIRECTIONAL_SEQUENCE_LSTM_{mode}_{int(asym)}{int(tm)}_{name}", "UNIDIRECTIONAL_SEQUENCE_LSTM", ins, [y_out(mode, hq)],
+            uni(tm, asym, 2.5, 0.7 if kw.get("proj") else 0.0), intermediates=inter, invokes=2)
+  # BIDIRECTIONAL_SEQUENCE_LSTM: inputs, both directions' weights, states, then the aux input and its weights
+  bi = lambda tm, merge, asym=False: ("BidirectionalSequenceLSTMOptions", {"fusedActivationFunction": ACT["TANH"], "cellClip": 2.0, "projClip": 0.0, "mergeOutputs": merge, "timeMajor": tm, "asymmetricQuantizeInputs": asym})
+  def bidi(mode, shape, tm, aux=None, aux_weights=False, **kw):
+    no = 3 if kw.get("proj") else nc
+    na = aux.shape[-1] if aux is not None else 0
+    def AW(seed):
+      if not aux_weights:
+        return [None] * 4
+      wt = mode
+      W = lambda s: T([nc, na], data=const([nc, na], "float32", s, -0.6, 0.6)) if wt == "float32" else T([nc, na], wt, (0.01, 0), data=const([nc, na], wt, s))
+      return [None if kw.get("cifg") else W(seed)] + [W(seed + g) for g in (1, 2, 3)]
+    nb_ = shape[1] if tm else shape[0]
+    return ([T(shape)] + cell(mode, ni, nc, no, 840, **kw) + cell(mode, ni, nc, no, 860, **kw) + states(mode, nb_, nc, no) + states(mode, nb_, nc, no)
+            + [aux] + AW(880) + AW(890))
+  # 2.5 goes past the states for a merged float batch-major pass of more than one row, and for a hybrid
+  # batch-major pass longer than its batch (it runs hybrid as time-major): coralrt refuses those, so none here
+  for mode in ["float32", "int8"]:
+    major = [B_, T_, ni] if mode == "float32" else [3, 2, ni]
+    merged_major = [1, T_, ni] if mode == "float32" else [2, 2, ni]
+    for asym in [False, True] if mode == "int8" else [False]:
+      for bt, merge, shape in [(True, False, [T_, B_, ni]), (True, True, [T_, B_, ni]), (False, False, major), (False, True, merged_major)]:
+        tag = f"{mode}_{int(asym)}{int(bt)}{int(merge)}"
+        outs = [T([])] if merge else [T([]), T([])]
+        c(f"BIDIRECTIONAL_SEQUENCE_LSTM_{tag}", "BIDIRECTIONAL_SEQUENCE_LSTM", bidi(mode, shape, bt, peep=True, proj=True), outs, bi(bt, merge, asym), invokes=2)
+      for bt in [True, False]:
+        shape = [T_, B_, ni] if bt else major
+        aux_shape = shape[:2] + [5]
+        tag = f"{mode}_{int(asym)}{int(bt)}"
+        c(f"BIDIRECTIONAL_SEQUENCE_LSTM_{tag}_aux", "BIDIRECTIONAL_SEQUENCE_LSTM", bidi(mode, shape, bt, T(aux_shape), True), [T([])] if bt else [T([]), T([])], bi(bt, bt, asym), invokes=2)
+        c(f"BIDIRECTIONAL_SEQUENCE_LSTM_{tag}_aux_cifg", "BIDIRECTIONAL_SEQUENCE_LSTM", bidi(mode, shape, bt, T(aux_shape), True, cifg=True), [T([]), T([])], bi(bt, False, asym), invokes=2)
+        c(f"BIDIRECTIONAL_SEQUENCE_LSTM_{tag}_nonstacking", "BIDIRECTIONAL_SEQUENCE_LSTM", bidi(mode, shape, bt, T(shape)), [T([]), T([])], bi(bt, False, asym), invokes=2)
+  return out
+
+
 def all_cases():
   return (binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases() + nn_cases()
-          + lookup_cases() + control_cases() + complex_cases() + nms_cases() + sparse_cases() + rnn_cases())
+          + lookup_cases() + control_cases() + complex_cases() + nms_cases() + sparse_cases() + rnn_cases() + lstm_cases())

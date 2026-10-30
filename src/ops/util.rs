@@ -213,6 +213,13 @@ pub fn quantize_multiplier(d: f64) -> (i32, i32) {
     (q_fixed as i32, shift)
 }
 
+/// CheckedLog2 (quantization_util.cc): the rounded log2 of x, and whether x is (close to) a power of two
+pub fn checked_log2(x: f32) -> (i32, bool) {
+    let x_log2 = x.ln() * (1.0f32 / 2.0f32.ln());
+    let rounded = x_log2.round();
+    (rounded as i32, (x_log2 - rounded).abs() < 1e-3)
+}
+
 pub fn quantize_multiplier_smaller_than_one(d: f64) -> Result<(i32, i32)> {
     if !(d > 0.0 && d < 1.0) {
         return err(format!("quantized multiplier {d} is outside (0, 1)"));

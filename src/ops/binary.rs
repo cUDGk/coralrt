@@ -241,7 +241,10 @@ fn eval(k: &Binary, a: &Tensor, b: &Tensor, o: &mut Tensor) -> Result<()> {
         // *** quantized ***
         (Op::Add | Op::Sub, TType::U8 | TType::I8) => add_sub_q(k, a, b, o, 20)?,
         (Op::Add | Op::Sub, TType::I16) => {
-            let pot_scales = [a.scale(), b.scale(), o.scale()].map(log2_pot);
+            let pot_scales = [a.scale(), b.scale(), o.scale()].map(|s| match checked_log2(s) {
+                (l, true) => Some(l),
+                _ => None,
+            });
             if a.zero_point() != 0 || b.zero_point() != 0 || o.zero_point() != 0 {
                 return err("int16 needs zero points 0");
             }
@@ -330,13 +333,6 @@ fn eval(k: &Binary, a: &Tensor, b: &Tensor, o: &mut Tensor) -> Result<()> {
         (op, t) => return err(format!("{op:?} on {t:?} is not supported")),
     }
     Ok(())
-}
-
-/// CheckedLog2 of a scale: the exponent when it is a power of two
-fn log2_pot(s: f32) -> Option<i32> {
-    let x = s.ln() * (1.0f32 / 2.0f32.ln());
-    let r = x.round();
-    ((x - r).abs() < 1e-3).then_some(r as i32)
 }
 
 /// add.cc / sub.cc for 8 bits (left shift 20) and int16 with general scales (15): both inputs rescaled to twice the

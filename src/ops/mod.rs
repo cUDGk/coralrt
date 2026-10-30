@@ -15,6 +15,7 @@ mod dense;
 mod dpp;
 mod eigen;
 mod lookup;
+mod lstm;
 mod movement;
 mod nms;
 mod norm;
@@ -37,6 +38,8 @@ use crate::{Error, Result};
 /// writes in place (taken out of `ins` into `vars`).
 pub struct Io<'a> {
     pub ins: Vec<Option<&'a Tensor>>,
+    /// the op's intermediate tensors (LSTM keeps quantization parameters in them)
+    pub inter: Vec<&'a Tensor>,
     pub outs: Vec<Tensor>,
     pub vars: Vec<(usize, Tensor)>,
 }
@@ -71,7 +74,7 @@ pub trait Kernel: Send {
 }
 
 pub fn create(s: &OpSpec) -> Result<Box<dyn Kernel>> {
-    for module in [binary::create, complex::create, control::create, conv::create, data::create, dense::create, lookup::create, movement::create, nms::create, norm::create, pool::create, quant::create, reduce::create, resize::create, resource::create, rnn::create, shape::create, unary::create] {
+    for module in [binary::create, complex::create, control::create, conv::create, data::create, dense::create, lookup::create, lstm::create, movement::create, nms::create, norm::create, pool::create, quant::create, reduce::create, resize::create, resource::create, rnn::create, shape::create, unary::create] {
         if let Some(k) = module(s)? {
             return Ok(k);
         }

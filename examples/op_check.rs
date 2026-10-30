@@ -81,7 +81,9 @@ fn compare(want: &[u8], got: &[u8], dtype: &str, tol: f64) -> Option<String> {
     }
     let n = want.len().min(got.len());
     let diff = (0..n).filter(|&i| want[i] != got[i]).count();
-    Some(format!("{diff} of {} bytes differ, first at {:?} (sizes {} vs {})", want.len(), (0..n).find(|&i| want[i] != got[i]), got.len(), want.len()))
+    let first = (0..n).find(|&i| want[i] != got[i]);
+    let bytes = first.map_or(String::new(), |i| format!(" byte {} vs {}", got[i], want[i]));
+    Some(format!("{diff} of {} bytes differ, first at {first:?}{bytes} (sizes {} vs {})", want.len(), got.len(), want.len()))
 }
 
 /// `outs`: the outputs' shapes and types per invoke

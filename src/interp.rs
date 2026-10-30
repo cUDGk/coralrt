@@ -126,7 +126,8 @@ pub fn invoke(g: &mut Graph, env: &mut Env) -> Result<()> {
     Ok(())
 }
 
-/// variable tensors back to their initial values (the model's buffer, else zeros)
+/// variable tensors back to their initial values: the model's buffer, else zeros (ResetVariableTensor: int8 ones
+/// filled with their zero point)
 pub fn reset_variables(g: &mut Graph) {
     for t in g.tensors.iter_mut().filter(|t| t.alloc == Alloc::Variable) {
         let n = t.elements() * t.dtype.size();
@@ -134,6 +135,9 @@ pub fn reset_variables(g: &mut Graph) {
         if let Some(init) = &t.initial {
             let m = n.min(init.len());
             t.buf.bytes_mut()[..m].copy_from_slice(&init[..m]);
+        } else if t.dtype == crate::tensor::TType::I8 {
+            let zp = t.zero_point() as u8;
+            t.buf.bytes_mut().fill(zp);
         }
     }
 }
@@ -151,6 +155,7 @@ fn step(g: &mut Graph, k: usize, env: &mut Env, preparing: bool) -> Result<()> {
     let tensors = &g.tensors;
     let mut io = Io {
         ins: op.inputs.iter().enumerate().map(|(p, &i)| (i >= 0 && !mutated.contains(&p)).then(|| &tensors[i as usize])).collect(),
+        inter: op.intermediates.iter().filter(|&&i| i >= 0).map(|&i| &tensors[i as usize]).collect(),
         outs,
         vars,
     };

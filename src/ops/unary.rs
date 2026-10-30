@@ -161,13 +161,6 @@ fn round_to_nearest(v: f32) -> f32 {
     if diff < 0.5 || (diff == 0.5 && fi % 2 == 0) { f } else { f + 1.0 }
 }
 
-/// CheckedLog2 (quantization_util.cc): the rounded log2 of x, and whether x is (close to) a power of two
-fn checked_log2(x: f32) -> (i32, bool) {
-    let x_log2 = x.ln() * (1.0f32 / 2.0f32.ln());
-    let rounded = x_log2.round();
-    (rounded as i32, (x_log2 - rounded).abs() < 1e-3)
-}
-
 /// TanhPrepare / SigmoidPrepare for int16: (input multiplier, 0 for a power-of-two scale; input left shift)
 fn int16_params(input_scale: f32, tanh: bool) -> (i32, i32) {
     let (log2, mut pot) = checked_log2(input_scale);
