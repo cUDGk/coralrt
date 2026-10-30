@@ -87,6 +87,11 @@ def quant_cases():
       out.append(op_case(f"QUANTIZE_{dt}_{dt2}", "QUANTIZE", [T([4, 100], dt, Q[dt])], [T([4, 100], dt2, QO[dt2])]))
     out.append(op_case(f"DEQUANTIZE_{dt}", "DEQUANTIZE", [T([4, 100], dt, Q[dt])], [T([4, 100])]))
   out.append(op_case("DEQUANTIZE_int16", "DEQUANTIZE", [T([4, 100], "int16", Q["int16"])], [T([4, 100])]))
+  out.append(op_case("QUANTIZE_f32_int16", "QUANTIZE", [T([3, 50], gen=("uniform", -40, 40))], [T([3, 50], "int16", (0.002, 0))]))
+  # far outside the range: x86 turns the overflowing conversion into the minimum before clamping
+  out.append(op_case("QUANTIZE_f32_overflow", "QUANTIZE", [T([6], value=[1e12, -1e12, 3e9, 2147483647.6, 40.0, -40.0])], [T([6], "int8", (1.0, 0))]))
+  for dt, q in [("int8", (0.05, 3)), ("int16", (0.0007, 0)), ("int32", (0.0001, 7))]:
+    out.append(op_case(f"QUANTIZE_int16_{dt}", "QUANTIZE", [T([4, 100], "int16", Q["int16"])], [T([4, 100], dt, q)]))
   out.append(op_case("DEQUANTIZE_float16", "DEQUANTIZE", [T([4, 25], "float16", data=[[i * 0.37 - 9 for i in range(25)]] * 4)], [T([4, 25])]))
   # ranges with 0 inside, at an end, outside (the zero point clamps), and wide grids
   for k, (mn, mx, bits) in enumerate([(-1.0, 1.0, 8), (-0.3, 5.7, 8), (0.0, 2.0, 4), (-6.0, 0.0, 16), (-2.5, 2.5, 3), (0.1, 3.0, 8), (-7.3, -0.2, 8)]):

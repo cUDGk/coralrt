@@ -81,19 +81,21 @@ impl Kernel for Elementwise {
 fn quantize(i: &Tensor, o: &mut Tensor) -> Result<()> {
     let (lo, hi) = type_range(o.dtype);
     match (i.dtype, o.dtype) {
-        (TType::F32, TType::U8 | TType::I8) => {
+        (TType::F32, TType::U8 | TType::I8 | TType::I16) => {
             // optimized_ops::AffineQuantize: divides by the scale as a double
             let (scale, zp) = (o.scale() as f64, o.zero_point());
-            for (d, &x) in o.data_mut().iter_mut().zip(i.as_slice::<f32>()) {
-                *d = round_i32(x as f64 / scale).wrapping_add(zp).clamp(lo, hi) as u8;
-            }
+            let v: Vec<i64> = i.as_slice::<f32>().iter().map(|&x| round_i32(x as f64 / scale).wrapping_add(zp).clamp(lo, hi) as i64).collect();
+            put_ints(o, &v)?;
         }
-        (TType::U8 | TType::I8, TType::U8 | TType::I8) => {
+        (TType::U8 | TType::I8, TType::U8 | TType::I8) | (TType::I16, TType::I8 | TType::I16 | TType::I32) => {
+            if i.dtype == TType::I16 && o.dtype == TType::I16 && (i.zero_point() != 0 || o.zero_point() != 0) {
+                return err("int16 -> int16 needs zero points 0");
+            }
             // Requantize with QuantizeMultiplier(input scale / output scale)
             let (m, shift) = quantize_multiplier(i.scale() as f64 / o.scale() as f64);
             let (izp, ozp) = (i.zero_point(), o.zero_point());
-            let v = byte_table(i.dtype, |x| (mul_by_quantized_multiplier(x - izp, m, shift) + ozp).clamp(lo, hi));
-            o.data_mut().iter_mut().zip(i.data()).for_each(|(d, &b)| *d = v[b as usize] as u8);
+            let v: Vec<i64> = ints(i)?.iter().map(|&x| mul_by_quantized_multiplier(x as i32 - izp, m, shift).wrapping_add(ozp).clamp(lo, hi) as i64).collect();
+            put_ints(o, &v)?;
         }
         (a, b) => return err(format!("{a:?} -> {b:?} is not supported")),
     }

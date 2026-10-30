@@ -57,15 +57,16 @@ pub fn mul_by_quantized_multiplier(x: i32, m: i32, shift: i32) -> i32 {
     rounding_divide_by_pot(srdhm(x.wrapping_mul(1 << l), m), r)
 }
 
-/// x.round() as i32 (half away from zero, saturating) without the libm call that round() is on baseline x86-64:
-/// x - trunc(x) is exact for |x| < 2^31
+/// static_cast<int32_t>(std::round(x)) as x86 runs it (half away from zero; the minimum when out of range or NaN)
+/// without the libm call that round() is on baseline x86-64: x - trunc(x) is exact for |x| < 2^31
 pub fn round_i32(x: f64) -> i32 {
     if x.is_nan() || x.abs() >= 2147483648.0 {
-        return x.round() as i32;
+        return cvtt(x.round(), false) as i32;
     }
     let t = x as i64;
     let f = x - t as f64;
-    (t + (f >= 0.5) as i64 - (f <= -0.5) as i64).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+    // rounding up to 2^31 is out of range too
+    i32::try_from(t + (f >= 0.5) as i64 - (f <= -0.5) as i64).unwrap_or(i32::MIN)
 }
 
 pub fn frexp(x: f64) -> (f64, i32) {
