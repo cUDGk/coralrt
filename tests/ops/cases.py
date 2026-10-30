@@ -347,5 +347,24 @@ def norm_cases():
   return out
 
 
+def nn_cases():
+  out = []
+  c = lambda *a, **k: out.append(op_case(*a, **k))
+  PAD = {"SAME": 0, "VALID": 1}
+  # (input shape, filter h, w, stride h, w, padding)
+  pools = [([1, 5, 6, 3], 2, 2, 2, 2, "VALID"), ([2, 5, 7, 4], 3, 3, 1, 1, "SAME"), ([1, 7, 5, 9], 3, 2, 2, 3, "SAME"),
+           ([1, 4, 4, 2], 4, 4, 1, 1, "VALID"), ([1, 6, 6, 5], 5, 5, 2, 2, "SAME")]
+  for op in ["AVERAGE_POOL_2D", "MAX_POOL_2D", "L2_POOL_2D"]:
+    types = ["float32"] if op == "L2_POOL_2D" else ["float32", "uint8", "int8", "int16"]
+    for dt in types:
+      q = (Q[dt][0], 0) if dt == "int16" else Q.get(dt)
+      for k, (shape, fh, fw, sh, sw, pad) in enumerate(pools):
+        for act in (["NONE", "RELU6"] if k == 1 else ["NONE"]):
+          c(f"{op}_{dt}_{k}_{act}", op, [T(shape, dt, q)], [T([], dt, q)],
+            ("Pool2DOptions", {"padding": PAD[pad], "strideW": sw, "strideH": sh, "filterWidth": fw, "filterHeight": fh,
+                               "fusedActivationFunction": ACT[act]}))
+  return out
+
+
 def all_cases():
-  return binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases()
+  return binary_cases() + quant_cases() + shape_cases() + movement_cases() + reduce_cases() + unary_cases() + norm_cases() + nn_cases()

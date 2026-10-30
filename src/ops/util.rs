@@ -24,6 +24,36 @@ pub fn opt_vec(s: &OpSpec, i: usize) -> Vec<i32> {
     s.opts.map_or(Vec::new(), |t| t.scalars(i))
 }
 
+/// Padding (schema): SAME or VALID
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Padding {
+    Same,
+    Valid,
+}
+
+pub fn opt_padding(s: &OpSpec, i: usize) -> Result<Padding> {
+    match opt::<i8>(s, i, 0) {
+        0 => Ok(Padding::Same),
+        1 => Ok(Padding::Valid),
+        p => err(format!("padding {p} is not SAME or VALID")),
+    }
+}
+
+/// ComputeOutSize and ComputePaddingWithOffset (padding.h) along one axis: (output size, padding before, 1 when the
+/// total padding is odd and the extra one goes after)
+pub fn out_size_and_pad(p: Padding, in_size: i32, filter: i32, stride: i32, dilation: i32) -> (i32, i32, i32) {
+    let effective = (filter - 1) * dilation + 1;
+    let out = if stride == 0 {
+        0
+    } else if p == Padding::Same {
+        (in_size + stride - 1) / stride
+    } else {
+        (in_size + stride - effective) / stride
+    };
+    let total = ((out - 1) * stride + effective - in_size).max(0);
+    (out, total / 2, total % 2)
+}
+
 // *** fixed point (gemmlowp, kernels/internal/common.h, quantization_util.cc) ***
 
 pub fn type_range(t: TType) -> (i32, i32) {
