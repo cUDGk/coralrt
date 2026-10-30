@@ -10,7 +10,7 @@ requires-python = ">=3.8"
 dependencies = ["numpy"]
 
 [tool.setuptools]
-packages = ["coralrt", "pycoral", "pycoral.adapters", "pycoral.utils", "tflite_runtime"]
+packages = ["coralrt", "pycoral", "pycoral.adapters", "pycoral.learn", "pycoral.learn.backprop", "pycoral.learn.imprinting", "pycoral.pipeline", "pycoral.utils", "tflite_runtime"]
 
 [tool.setuptools.package-data]
 coralrt = ["*.dll", "*.so", "*.dylib"]
