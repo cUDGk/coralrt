@@ -16,7 +16,11 @@ pub struct EdgeTpuOp {
     caching: Vec<usize>,
     /// batches per invoke (from prepare)
     batches: usize,
+    /// tells this op's parameters in the chip from another op's (with the same model or caching token)
+    id: u64,
 }
+
+static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Kernel for EdgeTpuOp {
     fn prepare(&mut self, io: &mut Io, _: &mut Env) -> Result<()> {
@@ -73,7 +77,7 @@ impl EdgeTpuOp {
         if exes[infer].outputs.iter().any(|l| l.name.ends_with("_variable_output")) {
             return Err(Error("Edge TPU models with variable (stateful) outputs are not supported".into()));
         }
-        Ok(EdgeTpuOp { exes, infer, caching, batches: 1 })
+        Ok(EdgeTpuOp { exes, infer, caching, batches: 1, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) })
     }
 
     fn exe(&self) -> &Executable {
@@ -127,7 +131,7 @@ impl EdgeTpuOp {
     pub fn invoke(&self, tpu: &mut EdgeTpu, batches: usize, ins: &[&[u8]], outs: &mut [&mut [u8]], out_info: &[&Tensor]) -> Result<()> {
         let e = self.exe();
         let caching: Vec<&Executable> = self.caching.iter().map(|&i| &self.exes[i]).collect();
-        tpu.ensure_cached(e.caching_token, &caching)?;
+        tpu.ensure_cached(self.id, e.caching_token, &caching)?;
         for b in 0..batches {
             let mut inputs = HashMap::new();
             for (l, data) in e.inputs.iter().zip(ins) {

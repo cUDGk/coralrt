@@ -5,7 +5,7 @@
 use crate::exe::{Desc, Executable, Hint};
 use crate::usb::{self, Backend, Handle, InStream, OutBuf};
 use crate::{Error, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -171,8 +171,10 @@ pub struct EdgeTpu {
     pub path: String,
     pub performance: Performance,
     pub usb_speed: i32,
-    /// parameter caching token of the executable whose parameters are in the chip's SRAM
+    /// parameter caching token of the parameters in the chip's SRAM, and the ops whose caching executables put them
+    /// there (models compiled together share a token and are cached side by side, as libedgetpu does)
     cached_token: u64,
+    cached: HashSet<u64>,
     /// a transfer failed: drain the pipes and re-initialize the chip before the next run
     needs_recovery: bool,
     /// for the bulk transfers of a run (the tests shorten it to make a run fail midway)
@@ -206,7 +208,7 @@ impl EdgeTpu {
         if usb.control_in(0xC0, 1, (reg::SCU_CTRL_0 & 0xffff) as u16, (reg::SCU_CTRL_0 >> 16) as u16, 4, 500).is_err() {
             return Err(Error("the Edge TPU does not answer: replug it".into()));
         }
-        let mut tpu = EdgeTpu { usb, path, performance, usb_speed, cached_token: 0, needs_recovery: false, timeout: TIMEOUT };
+        let mut tpu = EdgeTpu { usb, path, performance, usb_speed, cached_token: 0, cached: HashSet::new(), needs_recovery: false, timeout: TIMEOUT };
         tpu.init()?;
         Ok(tpu)
     }
@@ -297,7 +299,7 @@ impl EdgeTpu {
         self.write32(reg::SLV_ERR_RESP_ISR_MASK, 3)?;
         self.write32(reg::MST_ERR_RESP_ISR_MASK, 3)?;
         self.write32(reg::OMC0_D8, self.read32(reg::OMC0_D8)? | 0x8000_0000)?;
-        self.cached_token = 0;
+        self.forget_cached();
         Ok(())
     }
 
@@ -326,14 +328,23 @@ impl EdgeTpu {
         let r = self.run_hints(exe, inputs, outputs);
         if r.is_err() {
             self.needs_recovery = true;
-            self.cached_token = 0;
+            self.forget_cached();
         }
         r
     }
 
-    /// Parameter caching: run the caching executables when another model's parameters are in the chip.
-    pub fn ensure_cached(&mut self, token: u64, caching: &[&Executable]) -> Result<()> {
-        if caching.is_empty() || (token != 0 && token == self.cached_token) {
+    fn forget_cached(&mut self) {
+        self.cached_token = 0;
+        self.cached.clear();
+    }
+
+    /// Parameter caching (driver.cc SubmitInferenceRequest): another token (or none) drops what is cached; then op
+    /// `id`'s caching executables run unless they already did under this token.
+    pub fn ensure_cached(&mut self, id: u64, token: u64, caching: &[&Executable]) -> Result<()> {
+        if token == 0 || token != self.cached_token {
+            self.forget_cached();
+        }
+        if caching.is_empty() || self.cached.contains(&id) {
             return Ok(());
         }
         let mut sink = HashMap::new();
@@ -341,6 +352,7 @@ impl EdgeTpu {
             self.run(exe, &HashMap::new(), &mut sink)?;
         }
         self.cached_token = token;
+        self.cached.insert(id);
         Ok(())
     }
 
