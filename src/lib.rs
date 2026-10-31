@@ -3,7 +3,8 @@
 //! TensorFlow Lite 2.5, computing the same bytes as pycoral 2.0 (tflite_runtime 2.5 + libedgetpu).
 //! Rust uses this crate directly; every other language goes through the C ABI in `capi` (include/coralrt.h).
 //!
-//! Sources ported: libedgetpu (Apache 2.0), TensorFlow Lite 2.5 kernels (Apache 2.0), tinycoral (MIT).
+//! Sources ported: TensorFlow Lite 2.5, libedgetpu, gemmlowp, ruy, the Microsoft STL, Eigen, farmhash and tinycoral;
+//! NOTICE says which file comes from which, and under what license.
 
 mod capi;
 mod chip;

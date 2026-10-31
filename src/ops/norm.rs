@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Normalizations along the last axis: SOFTMAX and LOG_SOFTMAX (activations.cc), L2_NORMALIZATION (l2norm.cc) and
 //! LOCAL_RESPONSE_NORMALIZATION (local_response_norm.cc), each the way the kernel 2.5's resolver picks computes it.
 

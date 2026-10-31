@@ -3,6 +3,7 @@
 # op suite's results on Linux into ~/ops_linux, then the Linux build of coralrt is compared with them. coralrt
 # follows the Windows build of 2.5, which itself differs from the Linux build in about 150 cases.
 set -eu
+source "$(dirname "$0")/env.sh"
 if [ ! -x "$HOME/.local/bin/uv" ]; then
   curl -LsSf https://astral.sh/uv/install.sh | sh > /dev/null
 fi
@@ -15,6 +16,6 @@ fi
 rm -rf "$HOME/ops_linux"
 mkdir -p "$HOME/ops_linux"
 cp -r "$HOME/ops/models" "$HOME/ops_linux/models"
-"$HOME/venv-rt/bin/python" -I "$HOME/coral/coralrt/tests/ops/official.py" "$HOME/ops_linux" 2>&1 | tail -1
-"$HOME/coral/coralrt/target/release/examples/op_check" "$HOME/ops_linux" > "$HOME/ops_linux.log" 2>&1 || true
+"$HOME/venv-rt/bin/python" -I "$LIN/tests/ops/official.py" "$HOME/ops_linux" 2>&1 | tail -1
+"$LIN/target/release/examples/op_check" "$HOME/ops_linux" > "$HOME/ops_linux.log" 2>&1 || true
 grep -v "^match\|^RAN " "$HOME/ops_linux.log" | tail -40

@@ -1,3 +1,6 @@
+// This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the MPL was
+// not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// From Eigen f612df27 (Copyright the Eigen authors), translated and changed.
 //! Eigen's float approximations that TFLite's optimized kernels call (Eigen f612df27, the one TensorFlow 2.5 pins):
 //! the same constants and the same order of operations, so the same bits. pmadd is a multiply then an add (the
 //! build without FMA).

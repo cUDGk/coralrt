@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! TensorFlow Lite model files (schema.fbs v3 as of TensorFlow Lite 2.5): every subgraph with its tensors and
 //! operators. Each operator gets its kernel when the model is read (ops::create).
 

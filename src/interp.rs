@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Running a model: each subgraph's ops in order, prepare (shapes) before the first invoke and after a resize.
 
 use crate::ops::Io;

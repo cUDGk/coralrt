@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Elementwise ops on one input (elementwise.cc, activations.cc, exp.cc, neg.cc, floor.cc, ceil.cc, round.cc,
 //! zeros_like.cc). Multipliers are worked out in float first where TFLite's Prepare does, then widened.
 

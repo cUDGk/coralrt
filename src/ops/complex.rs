@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Complex numbers: REAL, IMAG, COMPLEX_ABS (complex_support.cc) and RFFT2D (rfft2d.cc), whose transform is Takuya
 //! Ooura's rdft2d in double (third_party/oourafft, compiled by build.rs as in the official runtime).
 

@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! The parts of tensor_utils that the hybrid and recurrent kernels share, as the x86 build runs them: the portable
 //! versions (reference/portable_tensor_utils.cc), since it has neither SSSE3 nor NEON.
 

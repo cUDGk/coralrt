@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Reductions and scans along axes (reduce.cc, arg_min_max.cc, cumsum.cc, segment_sum.cc, topk_v2.cc).
 
 use super::util::*;

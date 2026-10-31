@@ -1,11 +1,12 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "coralrt"
 version = "0.1.0"
 description = "Coral Edge TPU models on the USB Accelerator from any Python 3, with pycoral and tflite_runtime compatible packages"
+license = "Apache-2.0 AND MPL-2.0 AND MIT"
 requires-python = ">=3.8"
 dependencies = ["numpy"]
 

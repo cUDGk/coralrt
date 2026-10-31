@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Elementwise ops on two broadcast inputs (add.cc, sub.cc, mul.cc, div.cc, floor_div.cc, floor_mod.cc, pow.cc,
 //! squared_difference.cc, maximum_minimum.cc, comparisons.cc, logical.cc, activations.cc PRELU).
 

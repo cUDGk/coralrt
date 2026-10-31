@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Hash tables kept as resources of the interpreter (hashtable*.cc, experimental/resource/static_hashtable.cc):
 //! int64 -> string or string -> int64, filled once by HASHTABLE_IMPORT.
 

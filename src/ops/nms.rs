@@ -1,3 +1,5 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
+// The heap steps are from the Microsoft STL (Copyright (c) Microsoft Corporation, Apache-2.0 WITH LLVM-exception).
 //! NON_MAX_SUPPRESSION_V4 / V5 (non_max_suppression.cc, reference_ops::NonMaxSuppression): greedy selection by
 //! score with IoU suppression, V5 with soft (Gaussian) score decay. The candidates live in a std::priority_queue,
 //! whose order among equal scores follows the heap algorithm, so that is written out as the STL runs it.

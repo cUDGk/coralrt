@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Ops that move elements without arithmetic: each says what shape its output has and which input element every
 //! output element comes from (or that it is a fill value). Any element type, strings included where TFLite has them.
 //! An output whose shape depends on input values that are not constant is sized while the op runs.

@@ -1,3 +1,4 @@
+# From pycoral 2.0 and libcoral (Copyright Google LLC, Apache License 2.0), rewritten; see NOTICE.
 """pycoral.learn.imprinting.engine on coralrt: weight imprinting (low-shot transfer learning) for classification
 models that end with L2Norm, a 1x1 Conv2d, Mul, Reshape and Softmax, as libcoral's ImprintingEngine does it.
 

@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Data ops with several inputs or outputs, or values to compute: SHAPE, RANK, SPLIT, SPLIT_V, SCATTER_ND, RANGE,
 //! ONE_HOT, MATRIX_SET_DIAG, SPARSE_TO_DENSE, WHERE, UNIQUE, SELECT, SELECT_V2, ADD_N, DENSIFY.
 

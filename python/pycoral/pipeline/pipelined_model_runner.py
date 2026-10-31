@@ -1,3 +1,4 @@
+# From pycoral 2.0 and libcoral (Copyright Google LLC, Apache License 2.0), rewritten; see NOTICE.
 """pycoral.pipeline.pipelined_model_runner on coralrt: runs a model segmented for several Edge TPUs, one thread per
 segment, as libcoral's PipelinedModelRunner does: tensors pass from segment to segment by name (a tensor goes on
 until the last segment that reads it), the queues between segments hold one request, and an empty push stops

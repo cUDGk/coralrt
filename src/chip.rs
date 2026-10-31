@@ -1,3 +1,5 @@
+// From libedgetpu (Copyright Google LLC, Apache License 2.0), translated and changed; see NOTICE.
+// Also from tinycoral (Copyright (c) 2026 Frederik Rogalski, MIT License, text in NOTICE).
 //! The Coral USB Accelerator ("beagle"): firmware upload, chip bring-up and running DarwiNN executables.
 //! Ports of libedgetpu driver/usb (usb_driver.cc, usb_dfu_commands.cc) and driver/beagle
 //! (beagle_top_level_handler.cc), by way of tinycoral's coral/device.py, dfu.py and runtime.py.

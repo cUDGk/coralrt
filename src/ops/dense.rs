@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! FULLY_CONNECTED (fully_connected.cc), the paths 2.5 takes by type: float through Eigen's GEMM (here summed in
 //! double: the order of Eigen's blocked product depends on the CPU's cache sizes, so float matches within
 //! rounding), quantized through ruy / gemmlowp (exact integers, then MultiplyByQuantizedMultiplier), hybrid (float

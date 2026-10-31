@@ -1,3 +1,5 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
+// The heap steps are from the Microsoft STL (Copyright (c) Microsoft Corporation, Apache-2.0 WITH LLVM-exception).
 //! TFLite_Detection_PostProcess (kernels/detection_postprocess.cc): box decoding and non-max suppression
 
 use super::util::err;

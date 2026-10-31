@@ -1,3 +1,4 @@
+# From pycoral 2.0 and libcoral (Copyright Google LLC, Apache License 2.0), rewritten; see NOTICE.
 """pycoral.learn.backprop.softmax_regression on coralrt: a softmax regression layer (fully connected + softmax)
 trained on the CPU with SGD on embeddings from an embedding extractor, then appended to that model, as libcoral's
 SoftmaxRegressionModel does it (in float32, numpy in place of Eigen; the starting weights are random either way).

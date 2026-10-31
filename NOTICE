@@ -1,0 +1,97 @@
+coralrt
+Copyright 2026 cUDGk
+
+Licensed under the Apache License, Version 2.0 (LICENSE), except src/ops/eigen.rs, which is under the Mozilla
+Public License, v. 2.0 (https://mozilla.org/MPL/2.0/) as Eigen is. coralrt is an independent project, not made or
+endorsed by Google.
+
+coralrt includes work derived from the following. Code was translated to Rust (or rewritten in Python) and changed.
+
+TensorFlow Lite 2.5 - https://github.com/tensorflow/tensorflow
+  Copyright The TensorFlow Authors. Apache License 2.0.
+  src/ops/, src/tflite.rs, src/interp.rs, python/tflite_runtime/
+
+libedgetpu - https://github.com/google-coral/libedgetpu
+  Copyright Google LLC. Apache License 2.0.
+  src/chip.rs, src/edgetpu.rs, src/exe.rs, src/usb.rs.
+  firmware/apex_latest_single_ep.bin is libedgetpu's firmware, unchanged (firmware/LICENSE.libedgetpu).
+
+pycoral 2.0 and libcoral - https://github.com/google-coral/pycoral, https://github.com/google-coral/libcoral
+  Copyright Google LLC. Apache License 2.0.
+  python/pycoral/: the files with Google's header are pycoral's, unchanged; the others are rewritten.
+  tests/oracle/pycoral_examples/ are pycoral's examples, unchanged.
+
+gemmlowp - https://github.com/google/gemmlowp
+  Copyright The gemmlowp Authors. Apache License 2.0.
+  src/ops/fixedpoint.rs
+
+ruy - https://github.com/google/ruy
+  Copyright Google LLC. Apache License 2.0.
+  src/ops/util.rs
+
+Microsoft STL - https://github.com/microsoft/STL
+  Copyright (c) Microsoft Corporation. Apache License 2.0 with LLVM Exception.
+  The heap steps in src/ops/nms.rs and src/ops/dpp.rs.
+
+Eigen - https://gitlab.com/libeigen/eigen
+  Copyright the Eigen authors. Mozilla Public License, v. 2.0.
+  src/ops/eigen.rs
+
+farmhash - https://github.com/google/farmhash
+  MIT License, below.
+  src/ops/lookup.rs
+
+tinycoral - https://github.com/FrederikRogalski/tinycoral
+  MIT License, below.
+  src/chip.rs
+
+Takuya Ooura's FFT package - https://www.kurims.kyoto-u.ac.jp/~ooura/fft.html
+  third_party/oourafft/, unchanged. Its author's terms: "Copyright Takuya OOURA, 1996-2001. You may use, copy,
+  modify and distribute this code for any purpose (include commercial use) and without fee. Please refer to this
+  package when you modify this code."
+
+--- farmhash ---
+
+Copyright (c) 2014 Google, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+--- tinycoral ---
+
+MIT License
+
+Copyright (c) 2026 Frederik Rogalski
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Convolutions (conv.cc): CONV_2D the way 2.5's x86 build runs it. Float goes through Eigen's convolution, whose
 //! summation order depends on its blocking, so it is summed in double here and matches within rounding. The
 //! quantized paths are im2col + GEMM (exact integer sums; padding contributes nothing) with the GEMM's

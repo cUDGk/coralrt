@@ -1,3 +1,4 @@
+# From tflite_runtime 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), rewritten; see NOTICE.
 """tflite_runtime.interpreter on coralrt: the names tflite_runtime 2.5's module has.
 
   import tflite_runtime.interpreter as tflite

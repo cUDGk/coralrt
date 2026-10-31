@@ -1,3 +1,4 @@
+// From libedgetpu (Copyright Google LLC, Apache License 2.0), translated and changed; see NOTICE.
 //! DarwiNN executables inside an `edgetpu-custom-op` (schema: libedgetpu executable/executable.fbs).
 
 use crate::fb::{at, Table};

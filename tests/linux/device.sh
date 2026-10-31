@@ -14,10 +14,10 @@
 #  4. Run this. Afterwards stop the attach loop, usbipd detach, and create the done file to give the stick back.
 set -u
 source "$HOME/.cargo/env"
-WIN=$(cd "$(dirname "$0")/../../.." && pwd)
+source "$(dirname "$0")/env.sh"
 lsusb | grep -i -E "18d1:9302|1a6e:089a" || echo "no Coral in lsusb"
-cd "$HOME/coral/coralrt"
+cd "$LIN"
 echo "== Rust"
-timeout 600 target/release/examples/oracle_check "$WIN/test_data" "$WIN/coralrt/target/oracle" 2>&1 | tail -12
+timeout 600 target/release/examples/oracle_check "$WORK/test_data" "$REPO/target/oracle" 2>&1 | tail -12
 echo "== Python"
-timeout 600 "$HOME/venv-test/bin/python" -I tests/oracle/check_python.py "$WIN/test_data" "$WIN/coralrt/target/oracle" 2>&1 | tail -12
+timeout 600 "$HOME/venv-test/bin/python" -I tests/oracle/check_python.py "$WORK/test_data" "$REPO/target/oracle" 2>&1 | tail -12

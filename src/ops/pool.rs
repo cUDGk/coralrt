@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Pooling over height and width (pooling.cc): AVERAGE_POOL_2D, MAX_POOL_2D, L2_POOL_2D, the way 2.5's optimized
 //! kernels compute them. Every window is the filter clipped to the input; padding never counts.
 

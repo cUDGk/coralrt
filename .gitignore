@@ -3,6 +3,8 @@ target/
 python/coralrt/*.dll
 python/coralrt/*.so
 python/coralrt/*.dylib
+python/LICENSE
+python/NOTICE
 python/*.egg-info/
 __pycache__/
 python/build/

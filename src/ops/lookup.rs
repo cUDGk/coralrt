@@ -1,3 +1,5 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
+// farmhash_fingerprint64 is from farmhash (Copyright (c) 2014 Google, Inc., MIT License, text in NOTICE).
 //! Lookups and hashing: EMBEDDING_LOOKUP, EMBEDDING_LOOKUP_SPARSE, HASHTABLE_LOOKUP, LSH_PROJECTION, SKIP_GRAM.
 
 use super::util::*;

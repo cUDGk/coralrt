@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Changes of element type: QUANTIZE, DEQUANTIZE, CAST; and FAKE_QUANT, float rounded to a quantized grid.
 
 use super::util::*;

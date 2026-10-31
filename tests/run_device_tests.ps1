@@ -1,6 +1,6 @@
 # All checks that need the stick, in order. Each step is killed after its timeout (a stuck transfer must not hang
 # the run). Run from anywhere:  powershell -ExecutionPolicy Bypass -File tests\run_device_tests.ps1
-#   -Data      the test_data folder (models and images, ..\fetch_test_data.py)
+#   -Data      the test_data folder (models and images, from tests\fetch_test_data.py)
 #   -Official  Python with pycoral 2.0 (the reference), -Py the Python with coralrt's packages
 #   -Tf        Python with TensorFlow, to write the model with a SignatureDef (oracle\make_signature_model.py)
 param(

@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! CPU kernels: every op of TensorFlow Lite 2.5's BuiltinOpResolver (the tflite_runtime under pycoral 2.0), written
 //! to give the same results: its fixed-point arithmetic (kernels/internal/common.h, quantization_util.cc), its
 //! float/double mix and its orderings. Integer and quantized ops match it byte for byte; float ops whose result

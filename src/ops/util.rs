@@ -1,3 +1,5 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
+// Also from ruy (Copyright Google LLC, Apache License 2.0), translated and changed.
 //! What the kernels share: TFLite's fixed-point arithmetic, activation ranges, broadcasting, and whole-tensor
 //! conversions between element types.
 

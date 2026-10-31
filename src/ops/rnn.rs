@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Simple recurrent cells (basic_rnn.cc, unidirectional_sequence_rnn.cc, bidirectional_sequence_rnn.cc): every time
 //! step is kernel_utils::RnnBatchStep, in float or hybrid (8-bit weights, the float input and state quantized per
 //! batch row). The sums run in the portable tensor_utils' order, so float matches exactly too. The hidden states

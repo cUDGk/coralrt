@@ -5,7 +5,8 @@
 set -u
 source "$HOME/.cargo/env"
 SHIM=$(cd "$(dirname "$0")/shim" && pwd)
-cd "$HOME/coral/coralrt"
+source "$(dirname "$0")/../linux/env.sh"
+cd "$LIN"
 for t in x86_64-apple-darwin aarch64-apple-darwin; do
   rustup target add "$t" > /dev/null 2>&1
   echo "== $t"

@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! Ops that move elements around without arithmetic (apart from requantizing CONCATENATION).
 
 use super::util::*;

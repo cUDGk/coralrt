@@ -1,3 +1,5 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
+// Also from gemmlowp (Copyright The gemmlowp Authors, Apache License 2.0), translated and changed.
 //! gemmlowp's fixed-point arithmetic (fixedpoint/fixedpoint.h) as TFLite's quantized kernels use it, for 32- and
 //! 16-bit raw values. A FixedPoint<raw, IB> is its raw value (held in an i64 here) and `Fx` its width; the integer
 //! bits IB travel as arguments. Where the C++ shifts by an out-of-range amount (undefined behaviour), this does what

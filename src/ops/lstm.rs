@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! LSTM (lstm.cc), UNIDIRECTIONAL_SEQUENCE_LSTM and BIDIRECTIONAL_SEQUENCE_LSTM, each time step as lstm_eval.cc
 //! takes it: float and hybrid (8-bit weights; the input, aux input, state and hidden rows quantized per batch row)
 //! through the portable tensor_utils in their order, so float matches exactly too; int8 with an int16 cell in

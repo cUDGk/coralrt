@@ -1,3 +1,4 @@
+// From TensorFlow Lite 2.5 (Copyright The TensorFlow Authors, Apache License 2.0), translated and changed; see NOTICE.
 //! The audio custom ops of TFLite 2.5's BuiltinOpResolver: AudioSpectrogram (audio_spectrogram.cc,
 //! internal/spectrogram.cc) through Ooura's rdft, the same C as the official runtime, and Mfcc (mfcc.cc,
 //! internal/mfcc*.cc), all in double as there.

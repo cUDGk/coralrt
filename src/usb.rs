@@ -1,3 +1,4 @@
+// From libedgetpu (Copyright Google LLC, Apache License 2.0), translated and changed; see NOTICE.
 //! libusb, loaded at run time (no link-time dependency): control transfers for the registers and
 //! DFU, and batches of async bulk transfers for the data path.
 //!

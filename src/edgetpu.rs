@@ -1,3 +1,4 @@
+// From libedgetpu (Copyright Google LLC, Apache License 2.0), translated and changed; see NOTICE.
 //! The `edgetpu-custom-op`: what libedgetpu does around running an executable (tflite/custom_op.cc,
 //! driver/single_tpu_request.cc, api/layer_information.cc): input padding and sign flip, parameter
 //! caching, output relayout from the tiles' layout, and the classifier output conversions.

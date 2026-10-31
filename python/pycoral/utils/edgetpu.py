@@ -1,3 +1,4 @@
+# From pycoral 2.0 and libcoral (Copyright Google LLC, Apache License 2.0), rewritten; see NOTICE.
 """pycoral.utils.edgetpu on coralrt: the same functions as pycoral 2.0, without libedgetpu or tflite_runtime.
 
 make_interpreter returns a coralrt.Interpreter (tflite_runtime's API), so pycoral.adapters work on it unchanged.
