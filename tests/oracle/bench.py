@@ -41,7 +41,7 @@ for r in range(rounds):
     extra = dll if who == "official" else []
     run = subprocess.run([py, "-I", os.path.abspath(__file__), "--worker", data, n] + extra, capture_output=True, text=True, timeout=600)
     if run.returncode:
-      sys.exit(f"{who}: {run.stderr}")
+      sys.exit(f"{who}: exit {run.returncode:#x}: {run.stderr}")
     ms[who].append(json.loads(run.stdout.strip().splitlines()[-1]))
 print(f"{'model':56} {'official':>9} {'coralrt':>9}  ms per invoke, median of {rounds} rounds x {n}")
 for model in ms["official"][0]:

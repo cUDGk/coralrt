@@ -35,6 +35,21 @@ Step "C: classify the parrot" "$root\target\release\classify_c.exe" @("$Data\mob
 Step "Python: every output byte vs pycoral, and speed" $Py @("-I", "$root\tests\oracle\check_python.py", $Data, $oracle) 300
 Step "pycoral's example scripts, official vs coralrt" $Py @("-I", "$root\tests\oracle\compare_examples.py", (Resolve-Path $Official), (Resolve-Path $Py), $Data, "$root\target\examples") 600
 
+# pycoral.learn and the pipeline: the same models written, the same outputs on the stick, the same API edges
+$learn = "$root\target\learn"
+Step "learn: models written by pycoral 2.0" $Official @("-I", "$root\tests\learn\make_models.py", $Data, "$learn\official") 300
+Step "learn: the same models written by coralrt" $Py @("-I", "$root\tests\learn\make_models.py", $Data, "$learn\coralrt") 300
+Step "learn: the models compared, and run on tflite_runtime 2.5" $Official @("-I", "$root\tests\learn\compare_models.py", "$learn\official", "$learn\coralrt") 300
+Step "backprop trained on the Edge TPU's embeddings (coralrt)" $Py @("-I", "$root\tests\learn\train_backprop.py", $Data, "$learn\backprop") 300
+$edges = @{}
+foreach ($who in @(@("official", $Official), @("coralrt", $Py))) {
+  Step "learn models and the pipeline on the stick, $($who[0])" $who[1] @("-I", "$root\tests\learn\run_device.py", $Data, "$learn\official", "$learn\backprop", "$learn\device_$($who[0])") 600
+  Step "pipeline API edges, $($who[0])" $who[1] @("-I", "$root\tests\learn\pipeline_edges.py", $Data) 300
+  $edges[$who[0]] = (Get-Content "$root\target\step.out") -join "`n"
+}
+Step "learn and pipeline outputs, official vs coralrt" $Py @("-I", "$root\tests\learn\compare_device.py", "$learn\device_official", "$learn\device_coralrt") 120
+Log "pipeline API edges: $(if ($edges['official'] -ceq $edges['coralrt']) { 'same' } else { 'DIFFERENT' })"
+
 $sigModel = "$root\target\signature_model.tflite"
 if (-not (Test-Path $sigModel)) {
   Step "write a model with a SignatureDef" $Tf @("-I", "$root\tests\oracle\make_signature_model.py", $sigModel) 300
