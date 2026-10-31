@@ -9,6 +9,10 @@ description = "Coral Edge TPU models on the USB Accelerator from any Python 3, w
 license = "Apache-2.0 AND MPL-2.0 AND MIT"
 requires-python = ">=3.8"
 dependencies = ["numpy"]
+dynamic = ["readme"]
+
+[project.urls]
+Repository = "https://github.com/cUDGk/coralrt"
 
 [tool.setuptools]
 packages = ["coralrt", "pycoral", "pycoral.adapters", "pycoral.learn", "pycoral.learn.backprop", "pycoral.learn.imprinting", "pycoral.pipeline", "pycoral.utils", "tflite_runtime"]

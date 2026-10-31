@@ -35,7 +35,7 @@ coralrt is not made or endorsed by Google.
 | Current Python | Checked on Python 3.12, 3.13 and 3.15 with numpy 1 and 2. numpy is the only dependency |
 | pycoral compatible | `pycoral.adapters`, `utils`, `pipeline`, `learn` (imprinting and backprop), `tflite_runtime.interpreter` |
 | C ABI | `include/coralrt.h` with `coralrt.dll` / `libcoralrt.so` |
-| Wheel | A wheel with the native library inside (`python/build_wheel.py`) |
+| pip | `pip install coralrt`: wheels for Windows x64 and Linux x86_64 / aarch64, with the native library inside |
 | Checked on | Windows 11 and Linux (Ubuntu 24.04 on WSL2, the stick passed through usbipd-win), with a real Coral. macOS: `cargo check` only, not run |
 
 Integer ops match byte for byte. Float convolutions and matrix products are summed in an order that depends on the CPU's SIMD even in the official runtime, so they match within 1e-5.
@@ -76,9 +76,17 @@ flowchart LR
 | --- | --- |
 | Windows | The official [Edge TPU runtime](https://coral.ai/docs/accelerator/get-started/). coralrt uses the WinUSB driver, UsbDk and `libusb-1.0.dll` it installs |
 | Linux | `libusb-1.0-0`. Checked as root only; other users need access to the device (such as the udev rules the official runtime installs) |
-| Build | Rust 1.85 or later, and a C compiler (for the FFT's C files) |
+| Building from source | Rust 1.85 or later, and a C compiler (for the FFT's C files) |
 
-### Build
+### Python
+
+```bash
+pip install coralrt
+```
+
+There are wheels for Windows x64 and for Linux x86_64 and aarch64 (glibc 2.28 or later).
+
+### Building from source
 
 ```bash
 git clone https://github.com/cUDGk/coralrt.git
@@ -86,15 +94,7 @@ cd coralrt
 cargo build --release
 ```
 
-`target/release` then has `coralrt.dll` (Windows) or `libcoralrt.so` (Linux).
-
-### Python
-
-```bash
-pip install -e python
-```
-
-`python python/build_wheel.py` builds a wheel with the native library inside, into `python/dist`.
+`target/release` then has `coralrt.dll` (Windows) or `libcoralrt.so` (Linux). `pip install -e python` makes Python use it; `python python/build_wheel.py` builds a wheel with it inside, into `python/dist`.
 
 ## Usage
 
@@ -166,6 +166,7 @@ From C, pass them as the second argument of `coral_interpreter_new`, like `"perf
 ### Known limits
 
 - Segmented models (`pycoral.pipeline`) are made for one Coral per segment. On a single stick, outputs are all zeros from the second image on, with the official pycoral too. Two sticks have not been tried.
+- Linux aarch64 (such as a Raspberry Pi): the wheel has been run on the CPU models only, not with a Coral.
 - macOS: only the build has been checked.
 
 ## Tests

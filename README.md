@@ -35,7 +35,7 @@ Google の公式のものではありません。
 | 今の Python | Python 3.12・3.13・3.15、numpy 1 と 2 で確かめた。要るのは numpy だけ |
 | pycoral の互換 | `pycoral.adapters`・`utils`・`pipeline`・`learn`(imprinting と backprop)、`tflite_runtime.interpreter` |
 | C の口 | `include/coralrt.h` と `coralrt.dll` / `libcoralrt.so` |
-| wheel | DLL 入りの wheel を作れる(`python/build_wheel.py`) |
+| pip | `pip install coralrt` で入る。Windows x64 と Linux の x86_64・aarch64 の wheel で、DLL が中に入っている |
 | 動作の確認 | Windows 11 と Linux(WSL2 の Ubuntu 24.04、usbipd-win で Coral を渡した)で、実機の Coral で確かめた。macOS は `cargo check` が通る所までで、実機では動かしていない |
 
 整数の演算はバイト単位で同じです。浮動小数の畳み込みと行列積は、公式でも足す順が CPU の SIMD で変わるので、誤差 1e-5 の範囲で同じとしています。
@@ -76,9 +76,17 @@ flowchart LR
 | --- | --- |
 | Windows | 公式の [Edge TPU runtime](https://coral.ai/docs/accelerator/get-started/) を入れておく。coralrt はそれが入れる WinUSB のドライバ・UsbDk・`libusb-1.0.dll` を使う |
 | Linux | `libusb-1.0-0`。手元では root でだけ確かめた。root 以外で使うには、機器に触れる権限(公式の runtime が入れる udev の規則など)が要る |
-| ビルド | Rust 1.85 以降と、C のコンパイラ(FFT の C のファイルを組み込むため) |
+| ソースから作る時 | Rust 1.85 以降と、C のコンパイラ(FFT の C のファイルを組み込むため) |
 
-### ビルド
+### Python
+
+```bash
+pip install coralrt
+```
+
+wheel は Windows x64 と、Linux の x86_64・aarch64(glibc 2.28 以降)の 3 つです。
+
+### ソースから作る
 
 ```bash
 git clone https://github.com/cUDGk/coralrt.git
@@ -86,15 +94,7 @@ cd coralrt
 cargo build --release
 ```
 
-`target/release` に `coralrt.dll`(Windows)または `libcoralrt.so`(Linux)ができます。
-
-### Python
-
-```bash
-pip install -e python
-```
-
-DLL 入りの wheel を作るときは `python python/build_wheel.py` を流します。`python/dist` に wheel ができます。
+`target/release` に `coralrt.dll`(Windows)または `libcoralrt.so`(Linux)ができます。Python からこれを使うときは `pip install -e python` を流します。DLL 入りの wheel を作るときは `python python/build_wheel.py` を流すと、`python/dist` に wheel ができます。
 
 ## 使い方
 
@@ -166,6 +166,7 @@ C では `coral_interpreter_new` の 2 つ目の引数に `"performance=max,devi
 ### 分かっている制限
 
 - 分割したモデル(`pycoral.pipeline`)は、区切りごとに別の Coral を使う前提で作られています。1 本の Coral で動かすと、2 枚目の画像からは出力が全部 0 になります。公式の pycoral も同じです。Coral を 2 本使っての確認はしていません。
+- Linux の aarch64(Raspberry Pi など)の wheel は、CPU のモデルで動くことまでしか確かめていません。Coral をつないでは試していません。
 - macOS は、ビルドが通るところまでしか確かめていません。
 
 ## 試験

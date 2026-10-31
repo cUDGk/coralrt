@@ -1,6 +1,7 @@
 """Smoke test of an installed coralrt wheel (run it outside the source tree): pycoral's classification of the
-parrot, imprinting, backprop and the pipeline. Without a stick the CPU model is classified and the pipeline left out.
-  python -I wheel_smoke.py <test_data>"""
+parrot, imprinting, backprop and the pipeline. Without a stick the CPU model is classified and the pipeline left out;
+--cpu does that without looking for a stick at all (no libusb needed, as on CI).
+  python -I wheel_smoke.py <test_data> [--cpu]"""
 import pathlib
 import sys
 
@@ -17,7 +18,7 @@ from pycoral.utils.edgetpu import list_edge_tpus, make_interpreter
 
 td = pathlib.Path(sys.argv[1])
 print(sys.version.split()[0], "coralrt", coralrt.version(), "from", pathlib.Path(coralrt.__file__).parent)
-devices = list_edge_tpus()
+devices = [] if "--cpu" in sys.argv[2:] else list_edge_tpus()
 print("devices", devices)
 tpu = "_edgetpu" if devices else ""
 it = make_interpreter(str(td / f"mobilenet_v2_1.0_224_inat_bird_quant{tpu}.tflite"))
@@ -26,7 +27,9 @@ parrot = Image.open(td / "parrot.jpg").convert("RGB")
 common.set_input(it, parrot.resize(common.input_size(it), Image.LANCZOS))
 it.invoke()
 top = classify.get_classes(it, top_k=1)[0]
-print("parrot:", read_label_file(str(td / "inat_bird_labels.txt")).get(top.id, top.id), round(top.score, 5))
+label = read_label_file(str(td / "inat_bird_labels.txt")).get(top.id, top.id)
+print("parrot:", label, round(top.score, 5))
+assert label == "Ara macao (Scarlet Macaw)", label
 e = ImprintingEngine(str(td / f"mobilenet_v1_1.0_224_l2norm_quant{tpu}.tflite"))
 e.train(np.ones(e.embedding_dim, np.float32), 0)
 print("imprinting model", len(e.serialize_model()), "bytes")
